@@ -6,20 +6,19 @@ require (
 	github.com/Azure/azure-sdk-for-go v55.8.0+incompatible
 	github.com/Azure/go-autorest/autorest v0.11.19
 	github.com/Azure/go-autorest/autorest/adal v0.9.14
-	github.com/Azure/go-autorest/autorest/to v0.4.0 // indirect
-	github.com/Azure/go-autorest/autorest/validation v0.3.1 // indirect
+	github.com/GoogleCloudPlatform/prometheus-engine v0.1.2
 	github.com/alecthomas/units v0.0.0-20210208195552-ff826a37aa15
-	github.com/aws/aws-sdk-go v1.40.10
+	github.com/aws/aws-sdk-go v1.40.11
 	github.com/cespare/xxhash/v2 v2.1.1
-	github.com/containerd/containerd v1.5.4 // indirect
+	github.com/containerd/containerd v1.5.2 // indirect
 	github.com/dennwc/varint v1.0.0
 	github.com/dgryski/go-sip13 v0.0.0-20200911182023-62edffca9245
-	github.com/digitalocean/godo v1.64.2
+	github.com/digitalocean/godo v1.62.0
 	github.com/docker/docker v20.10.7+incompatible
-	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/edsrzf/mmap-go v1.0.0
 	github.com/envoyproxy/go-control-plane v0.9.9
 	github.com/envoyproxy/protoc-gen-validate v0.6.1
+	github.com/go-kit/kit v0.10.0
 	github.com/go-kit/log v0.1.0
 	github.com/go-logfmt/logfmt v0.5.0
 	github.com/go-openapi/strfmt v0.20.1
@@ -33,17 +32,15 @@ require (
 	github.com/hetznercloud/hcloud-go v1.28.0
 	github.com/influxdata/influxdb v1.9.3
 	github.com/json-iterator/go v1.1.11
-	github.com/linode/linodego v0.31.0
-	github.com/miekg/dns v1.1.43
-	github.com/moby/term v0.0.0-20201216013528-df9cb8a40635 // indirect
-	github.com/morikuni/aec v1.0.0 // indirect
+	github.com/linode/linodego v0.28.5
+	github.com/miekg/dns v1.1.42
 	github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f
 	github.com/oklog/run v1.1.0
 	github.com/oklog/ulid v1.3.1
 	github.com/opentracing-contrib/go-stdlib v1.0.0
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pkg/errors v0.9.1
-	github.com/prometheus/alertmanager v0.22.2
+	github.com/prometheus/alertmanager v0.23.0
 	github.com/prometheus/client_golang v1.11.0
 	github.com/prometheus/client_model v0.2.0
 	github.com/prometheus/common v0.30.0
@@ -57,26 +54,30 @@ require (
 	go.uber.org/atomic v1.9.0
 	go.uber.org/goleak v1.1.10
 	golang.org/x/net v0.0.0-20210726213435-c6fcb2dbf985
-	golang.org/x/oauth2 v0.0.0-20210628180205-a41e5a781914
+	golang.org/x/oauth2 v0.0.0-20210514164344-f6687ab2804c
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20210630005230-0f9fa26af87c
-	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac
+	golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1
+	golang.org/x/time v0.0.0-20210611083556-38a9dc6acbc6
 	golang.org/x/tools v0.1.5
-	google.golang.org/api v0.51.0
-	google.golang.org/genproto v0.0.0-20210716133855-ce7ef5c701ea
-	google.golang.org/protobuf v1.27.1
+	google.golang.org/api v0.48.0
+	google.golang.org/genproto v0.0.0-20210604141403-392c879c8b08
+	google.golang.org/protobuf v1.26.0
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6
 	gopkg.in/fsnotify/fsnotify.v1 v1.4.7
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b
-	k8s.io/api v0.21.3
-	k8s.io/apimachinery v0.21.3
-	k8s.io/client-go v0.21.3
+	k8s.io/api v0.21.2
+	k8s.io/apimachinery v0.21.2
+	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/klog v1.0.0
 	k8s.io/klog/v2 v2.10.0
 )
 
 replace (
+	// Dependency resolution fails without adding this override. It's not entirely
+	// understandable why but this appears to sufficiently fix it.
+	k8s.io/client-go => k8s.io/client-go v0.21.2
+
 	k8s.io/klog => github.com/simonpasquier/klog-gokit v0.3.0
 	k8s.io/klog/v2 => github.com/simonpasquier/klog-gokit/v3 v3.0.0
 )
