@@ -34,6 +34,7 @@ import (
 	"syscall"
 	"time"
 
+	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
 	"github.com/alecthomas/units"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -313,6 +314,8 @@ func main() {
 		Default("").StringsVar(&cfg.featureList)
 
 	promlogflag.AddFlags(a, &cfg.promlogConfig)
+
+	gcmExporterOpts := gcm_export.NewFlagOptions(a)
 
 	_, err := a.Parse(os.Args[1:])
 	if err != nil {
@@ -603,6 +606,12 @@ func main() {
 					externalURL,
 				)
 			},
+		}, {
+			name: "gcm_export",
+			reloader: func(cfg *config.Config) error {
+				// Call in closure to not call Global() before it's initialized below.
+				return gcm_export.Global().ApplyConfig(cfg)
+			},
 		},
 	}
 
@@ -670,6 +679,22 @@ func main() {
 			},
 			func(err error) {
 				close(cancel)
+			},
+		)
+	}
+	{
+		if err := gcm_export.InitGlobal(log.With(logger, "component", "gcm_exporter"), prometheus.DefaultRegisterer, *gcmExporterOpts); err != nil {
+			level.Error(logger).Log("msg", "Unable to init Google Cloud Monitoring exporter", "err", err)
+			os.Exit(2)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+
+		g.Add(
+			func() error {
+				return gcm_export.Global().Run(ctx)
+			},
+			func(err error) {
+				cancel()
 			},
 		)
 	}
