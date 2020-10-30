@@ -30,6 +30,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
 
+	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
 	"github.com/prometheus/prometheus/pkg/exemplar"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage"
@@ -418,6 +419,10 @@ func NewHead(r prometheus.Registerer, l log.Logger, wal *wal.WAL, opts *HeadOpti
 	if err != nil {
 		return nil, err
 	}
+
+	gcm_export.Global().SetLabelsByIDFunc(func(id uint64) labels.Labels {
+		return h.series.getByID(id).lset
+	})
 
 	return h, nil
 }
@@ -1163,8 +1168,9 @@ func (h *RangeHead) String() string {
 // initAppender is a helper to initialize the time bounds of the head
 // upon the first sample it receives.
 type initAppender struct {
-	app  storage.Appender
-	head *Head
+	app      storage.Appender
+	head     *Head
+	metadata gcm_export.MetadataFunc
 }
 
 func (a *initAppender) Append(ref uint64, lset labels.Labels, t int64, v float64) (uint64, error) {
@@ -1173,7 +1179,8 @@ func (a *initAppender) Append(ref uint64, lset labels.Labels, t int64, v float64
 	}
 
 	a.head.initTime(t)
-	a.app = a.head.appender()
+	a.app = a.head.appender(a.metadata)
+
 	return a.app.Append(ref, lset, t, v)
 }
 
@@ -1189,7 +1196,7 @@ func (a *initAppender) AppendExemplar(ref uint64, l labels.Labels, e exemplar.Ex
 	// We should never reach here given we would call Append before AppendExemplar
 	// and we probably want to always base head/WAL min time on sample times.
 	a.head.initTime(e.Ts)
-	a.app = a.head.appender()
+	a.app = a.head.appender(a.metadata)
 
 	return a.app.AppendExemplar(ref, l, e)
 }
@@ -1218,20 +1225,24 @@ func (a *initAppender) Rollback() error {
 }
 
 // Appender returns a new Appender on the database.
-func (h *Head) Appender(_ context.Context) storage.Appender {
+func (h *Head) Appender(ctx context.Context) storage.Appender {
 	h.metrics.activeAppenders.Inc()
+
+	// Leave metadata getter as nil if it's not contained in the context.
+	metadata, _ := gcm_export.MetadataFuncFromContext(ctx)
 
 	// The head cache might not have a starting point yet. The init appender
 	// picks up the first appended timestamp as the base.
 	if h.MinTime() == math.MaxInt64 {
 		return &initAppender{
-			head: h,
+			head:     h,
+			metadata: metadata,
 		}
 	}
-	return h.appender()
+	return h.appender(metadata)
 }
 
-func (h *Head) appender() *headAppender {
+func (h *Head) appender(metadata gcm_export.MetadataFunc) *headAppender {
 	appendID := h.iso.newAppendID()
 	cleanupAppendIDsBelow := h.iso.lowWatermark()
 
@@ -1252,6 +1263,7 @@ func (h *Head) appender() *headAppender {
 		appendID:              appendID,
 		cleanupAppendIDsBelow: cleanupAppendIDsBelow,
 		exemplarAppender:      h.exemplars,
+		metadata:              metadata,
 	}
 }
 
@@ -1278,7 +1290,7 @@ func (h *Head) ExemplarAppender() storage.ExemplarAppender {
 			head: h,
 		}
 	}
-	return h.appender()
+	return h.appender(nil)
 }
 
 func (h *Head) getAppendBuffer() []record.RefSample {
@@ -1355,6 +1367,8 @@ type headAppender struct {
 
 	appendID, cleanupAppendIDsBelow uint64
 	closed                          bool
+
+	metadata gcm_export.MetadataFunc
 }
 
 func (a *headAppender) Append(ref uint64, lset labels.Labels, t int64, v float64) (uint64, error) {
@@ -1559,6 +1573,8 @@ func (a *headAppender) Commit() (err error) {
 
 	a.head.metrics.samplesAppended.Add(float64(total))
 	a.head.updateMinMaxTime(a.mint, a.maxt)
+
+	gcm_export.Global().Export(a.metadata, a.samples)
 
 	return nil
 }
