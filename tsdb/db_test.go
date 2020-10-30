@@ -54,7 +54,10 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m, goleak.IgnoreTopFunction("github.com/prometheus/prometheus/tsdb.(*SegmentWAL).cut.func2"))
+	goleak.VerifyTestMain(m,
+		goleak.IgnoreTopFunction("github.com/prometheus/prometheus/tsdb.(*SegmentWAL).cut.func2")
+		// OpenCensus does not shutdown its main worker and needs to be ignored.
+		goleak.IgnoreTopFunction("go.opencensus.io/stats/view.(*worker).start"))
 }
 
 func openTestDB(t testing.TB, opts *Options, rngs []int64) (db *DB) {
