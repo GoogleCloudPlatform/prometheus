@@ -28,6 +28,7 @@ import (
 	"time"
 	"unsafe"
 
+	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
@@ -278,8 +279,14 @@ func newScrapePool(cfg *config.ScrapeConfig, app storage.Appendable, jitterSeed 
 		}
 		opts.target.SetMetadataStore(cache)
 
+		// Inject target for propagation to the GCM export pipeline at the storage level.
+		loopCtx := gcm_export.WithMetadataFunc(ctx, func(metric string) (gcm_export.MetricMetadata, bool) {
+			md, ok := opts.target.Metadata(metric)
+			return gcm_export.MetricMetadata(md), ok
+		})
+
 		return newScrapeLoop(
-			ctx,
+			loopCtx,
 			opts.scraper,
 			log.With(logger, "target", opts.target),
 			buffers,

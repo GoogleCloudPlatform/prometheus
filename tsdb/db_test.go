@@ -54,7 +54,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
+	// OpenCensus does not shutdown its main worker and needs to be ignored.
+	goleak.VerifyTestMain(m,
+		goleak.IgnoreTopFunction("go.opencensus.io/stats/view.(*worker).start"))
 }
 
 func openTestDB(t testing.TB, opts *Options, rngs []int64) (db *DB) {
