@@ -136,6 +136,8 @@ github.com/GoogleCloudPlatform/prometheus-engine v0.0.3 h1:u5qhWWj2//WY2vABt5pKH
 github.com/GoogleCloudPlatform/prometheus-engine v0.0.3/go.mod h1:VPA8h4ViRdPvNDLTXK0v7CW9h9d/CZ0BZNYcvXVN2xo=
 github.com/GoogleCloudPlatform/prometheus-engine v0.0.4 h1:6/YGVEBnHSdT66pDfKvo6HS16fduXz7adMbpojZ7kPQ=
 github.com/GoogleCloudPlatform/prometheus-engine v0.0.4/go.mod h1:VPA8h4ViRdPvNDLTXK0v7CW9h9d/CZ0BZNYcvXVN2xo=
+github.com/GoogleCloudPlatform/prometheus-engine v0.0.8 h1:GXc7f5VZEKiU65EutnQRR0Bq6UnDlE0aWszjBlCrj5c=
+github.com/GoogleCloudPlatform/prometheus-engine v0.0.8/go.mod h1:VPA8h4ViRdPvNDLTXK0v7CW9h9d/CZ0BZNYcvXVN2xo=
 github.com/HdrHistogram/hdrhistogram-go v0.9.0/go.mod h1:nxrse8/Tzg2tg3DZcZjm6qEclQKK70g0KxO61gFFZD4=
 github.com/HdrHistogram/hdrhistogram-go v1.0.1 h1:GX8GAYDuhlFQnI2fRDHQhTlkHMz8bEn0jTI6LJU0mpw=
 github.com/HdrHistogram/hdrhistogram-go v1.0.1/go.mod h1:BWJ+nMSHY3L41Zj7CA3uXnloDp7xxV0YvstAE7nKTaM=

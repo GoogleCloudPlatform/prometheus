@@ -6,7 +6,7 @@ require (
 	github.com/Azure/azure-sdk-for-go v55.2.0+incompatible
 	github.com/Azure/go-autorest/autorest v0.11.19
 	github.com/Azure/go-autorest/autorest/adal v0.9.14
-	github.com/GoogleCloudPlatform/prometheus-engine v0.0.4
+	github.com/GoogleCloudPlatform/prometheus-engine v0.0.8
 	github.com/alecthomas/units v0.0.0-20210208195552-ff826a37aa15
 	github.com/aws/aws-sdk-go v1.38.60
 	github.com/cespare/xxhash/v2 v2.1.1
