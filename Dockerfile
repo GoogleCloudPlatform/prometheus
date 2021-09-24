@@ -22,11 +22,13 @@ WORKDIR /app
 COPY --from=assets /app ./
 RUN CGO_ENABLED=0 go build \
     -tags builtinassets -mod=vendor \
-    -ldflags="-X main.Version=$(cat VERSION)" \
+    -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
+    -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
     ./cmd/prometheus
 RUN CGO_ENABLED=0 go build \
     -mod=vendor \
-    -ldflags="-X main.Version=$(cat VERSION)" \
+    -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
+    -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
     ./cmd/promtool
 
 # Configure distroless base image like the upstream Prometheus image.
