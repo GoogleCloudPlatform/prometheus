@@ -236,7 +236,6 @@ func New(logger log.Logger, reg prometheus.Registerer, opts ExporterOpts) (*Expo
 		shards: make([]*shard, shardCount),
 	}
 	e.seriesCache = newSeriesCache(logger, reg, opts.MetricTypePrefix, e.getExternalLabels, opts.Matchers)
-	e.builder = &sampleBuilder{series: e.seriesCache}
 
 	for i := range e.shards {
 		e.shards[i] = newShard(shardBufferSize)
@@ -347,12 +346,15 @@ func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample) {
 	if e.opts.Disable {
 		return
 	}
+	builder := newSampleBuilder(e.seriesCache)
+	defer builder.close()
+
 	for len(batch) > 0 {
 		var (
 			samples []hashedSeries
 			err     error
 		)
-		samples, batch, err = e.builder.next(metadata, batch)
+		samples, batch, err = builder.next(metadata, batch)
 		if err != nil {
 			level.Debug(e.logger).Log("msg", "building sample failed", "err", err)
 			continue
@@ -379,8 +381,8 @@ func (e *Exporter) triggerNext() {
 
 // ClientName and Version are used to identify to User Agent. TODO(maxamin): automate versioning.
 const (
-	ClientName = "gmp-collector"
-	Version    = "v2.28.1-gmp.0"
+	ClientName = "prometheus-engine-export"
+	Version    = "0.1.1"
 )
 
 // Run sends exported samples to Google Cloud Monitoring.
