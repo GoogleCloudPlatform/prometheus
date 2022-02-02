@@ -1,5 +1,5 @@
 ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs
-ARG IMAGE_BUILD_GO=golang:1.15-buster
+ARG IMAGE_BUILD_GO=golang:1.17-buster
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/static-debian10:debug
 ARG IMAGE_BASE=gcr.io/distroless/static-debian10
 
