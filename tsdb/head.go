@@ -31,6 +31,7 @@ import (
 	"go.uber.org/atomic"
 
 	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
+	gcm_exportsetup "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"github.com/prometheus/prometheus/pkg/exemplar"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage"
@@ -420,7 +421,7 @@ func NewHead(r prometheus.Registerer, l log.Logger, wal *wal.WAL, opts *HeadOpti
 		return nil, err
 	}
 
-	gcm_export.Global().SetLabelsByIDFunc(func(id uint64) labels.Labels {
+	gcm_exportsetup.Global().SetLabelsByIDFunc(func(id uint64) labels.Labels {
 		return h.series.getByID(id).lset
 	})
 
@@ -1574,7 +1575,7 @@ func (a *headAppender) Commit() (err error) {
 	a.head.metrics.samplesAppended.Add(float64(total))
 	a.head.updateMinMaxTime(a.mint, a.maxt)
 
-	gcm_export.Global().Export(a.metadata, a.samples)
+	gcm_exportsetup.Global().Export(a.metadata, a.samples)
 
 	return nil
 }
