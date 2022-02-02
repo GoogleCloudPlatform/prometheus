@@ -17,12 +17,11 @@ package export
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
+	"math"
+	"strings"
 	"sync"
 	"time"
 
-	"cloud.google.com/go/compute/metadata"
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
@@ -37,7 +36,6 @@ import (
 	"google.golang.org/api/option"
 	monitoring_pb "google.golang.org/genproto/googleapis/monitoring/v3"
 	"google.golang.org/grpc"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
 var (
@@ -45,10 +43,10 @@ var (
 		Name: "gcm_export_samples_exported_total",
 		Help: "Number of samples exported at scrape time.",
 	})
-	samplesDropped = prometheus.NewCounter(prometheus.CounterOpts{
+	samplesDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "gcm_export_samples_dropped_total",
 		Help: "Number of exported samples that were dropped because shard queues were full.",
-	})
+	}, []string{"reason"})
 	samplesSent = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "gcm_export_samples_sent_total",
 		Help: "Number of exported samples sent to GCM.",
@@ -93,14 +91,17 @@ type Exporter struct {
 	logger log.Logger
 	opts   ExporterOpts
 
-	seriesCache *seriesCache
-	builder     *sampleBuilder
-	shards      []*shard
+	metricClient *monitoring.MetricClient
+	seriesCache  *seriesCache
+	builder      *sampleBuilder
+	shards       []*shard
 
 	// Channel for signaling that there may be more work items to
 	// be processed.
 	nextc chan struct{}
 
+	// The external labels may be updated asynchronously by configuration changes
+	// and must be locked with mtx.
 	mtx            sync.Mutex
 	externalLabels labels.Labels
 }
@@ -112,13 +113,13 @@ const (
 	shardBufferSize = 2048
 
 	// Maximum number of samples to pack into a batch sent to GCM.
-	batchSizeMax = 200
+	BatchSizeMax = 200
 	// Time after an accumulating batch is flushed to GCM. This avoids data being
 	// held indefinititely if not enough new data flows in to fill up the batch.
 	batchDelayMax = 5 * time.Second
 
 	// Prefix for GCM metric.
-	metricTypePrefix = "prometheus.googleapis.com"
+	MetricTypePrefix = "prometheus.googleapis.com"
 )
 
 // ExporterOpts holds options for an exporter.
@@ -131,6 +132,8 @@ type ExporterOpts struct {
 	CredentialsFile string
 	// Disable authentication (for debugging purposes).
 	DisableAuth bool
+	// A user agent string added as a suffix to the regular user agent.
+	UserAgent string
 
 	// Default monitored resource fields set on exported data.
 	ProjectID string
@@ -148,55 +151,68 @@ type ExporterOpts struct {
 	BatchSize uint
 	// Prefix under which metrics are written to GCM.
 	MetricTypePrefix string
+
+	// A lease on a time range for which the exporter send sample data.
+	// It is checked for on each batch provided to the Export method.
+	// If unset, data is always sent.
+	Lease Lease
 }
 
-// NewFlagOptions returns new exporter options that are populated through flags
-// registered in the given application.
-func NewFlagOptions(a *kingpin.Application) *ExporterOpts {
-	var opts ExporterOpts
-
-	// Default target fields if we can detect them in GCP.
-	if metadata.OnGCE() {
-		opts.ProjectID, _ = metadata.ProjectID()
-		// These attributes are set for GKE nodes.
-		opts.Location, _ = metadata.InstanceAttributeValue("cluster-location")
-		opts.Cluster, _ = metadata.InstanceAttributeValue("cluster-name")
+// NopExporter returns an inactive exporter.
+func NopExporter() *Exporter {
+	return &Exporter{
+		opts: ExporterOpts{Disable: true},
 	}
+}
 
-	a.Flag("export.disable", "Disable exporting to GCM.").
-		Default("false").BoolVar(&opts.Disable)
+// Lease determines a currently owned time range.
+type Lease interface {
+	// Range informs whether the caller currently holds the lease and for what time range.
+	// The range is inclusive.
+	Range() (start, end time.Time, ok bool)
+	// Run background processing until context is cancelled.
+	Run(context.Context)
+	// OnLeaderChange sets a callback that is invoked when the lease leader changes.
+	// Must be called before Run.
+	OnLeaderChange(func())
+}
 
-	a.Flag("export.endpoint", "GCM API endpoint to send metric data to.").
-		Default("monitoring.googleapis.com:443").StringVar(&opts.Endpoint)
+// alwaysLease is a lease that is always held.
+type alwaysLease struct{}
 
-	a.Flag("export.credentials-file", "Credentials file for authentication with the GCM API.").
-		StringVar(&opts.CredentialsFile)
+func (alwaysLease) Range() (time.Time, time.Time, bool) {
+	return time.UnixMilli(math.MinInt64), time.UnixMilli(math.MaxInt64), true
+}
 
-	a.Flag("export.label.project-id", fmt.Sprintf("Default project ID set for all exported data. Prefer setting the external label %q in the Prometheus configuration if not using the auto-discovered default.", KeyProjectID)).
-		Default(opts.ProjectID).StringVar(&opts.ProjectID)
+func (alwaysLease) Run(ctx context.Context) {
+	<-ctx.Done()
+}
 
-	// The location and cluster flag should probably not be used. On the other hand, they make it easy
-	// to populate these important values in the monitored resource without interfering with existing
-	// Prometheus configuration.
-	a.Flag("export.label.location", fmt.Sprintf("The default location set for all exported data. Prefer setting the external label %q in the Prometheus configuration if not using the auto-discovered default.", KeyLocation)).
-		Default(opts.Location).StringVar(&opts.Location)
+func (alwaysLease) OnLeaderChange(f func()) {
+	// We never lose the lease as it's always owned.
+}
 
-	a.Flag("export.label.cluster", fmt.Sprintf("The default cluster set for all scraped targets. Prefer setting the external label %q in the Prometheus configuration if not using the auto-discovered default.", KeyCluster)).
-		Default(opts.Cluster).StringVar(&opts.Cluster)
+func newMetricClient(ctx context.Context, opts ExporterOpts) (*monitoring.MetricClient, error) {
+	// Identity User Agent for all gRPC requests.
+	ua := strings.TrimSpace(fmt.Sprintf("%s/%s %s", ClientName, Version, opts.UserAgent))
 
-	a.Flag("export.match", `A Prometheus time series matcher. Can be repeated. Every time series must match at least one of the matchers to be exported. This flag can be used equivalently to the match[] parameter of the Prometheus federation endpoint to selectively export data. (Example: --export.match='{job="prometheus"}' --export.match='{__name__=~"job:.*"})`).
-		SetValue(&opts.Matchers)
-
-	a.Flag("export.debug.metric-prefix", "Google Cloud Monitoring metric prefix to use.").
-		Default(metricTypePrefix).StringVar(&opts.MetricTypePrefix)
-
-	a.Flag("export.debug.disable-auth", "Disable authentication (for debugging purposes).").
-		Default("false").BoolVar(&opts.DisableAuth)
-
-	a.Flag("export.debug.batch-size", "Maximum number of points to send in one batch to the GCM API.").
-		Default(strconv.Itoa(batchSizeMax)).UintVar(&opts.BatchSize)
-
-	return &opts
+	clientOpts := []option.ClientOption{
+		option.WithGRPCDialOption(grpc.WithUnaryInterceptor(grpc_prometheus.UnaryClientInterceptor)),
+		option.WithUserAgent(ua),
+	}
+	if opts.Endpoint != "" {
+		clientOpts = append(clientOpts, option.WithEndpoint(opts.Endpoint))
+	}
+	if opts.DisableAuth {
+		clientOpts = append(clientOpts,
+			option.WithoutAuthentication(),
+			option.WithGRPCDialOption(grpc.WithInsecure()),
+		)
+	}
+	if opts.CredentialsFile != "" {
+		clientOpts = append(clientOpts, option.WithCredentialsFile(opts.CredentialsFile))
+	}
+	return monitoring.NewMetricClient(ctx, clientOpts...)
 }
 
 // New returns a new Cloud Monitoring Exporter.
@@ -223,19 +239,34 @@ func New(logger log.Logger, reg prometheus.Registerer, opts ExporterOpts) (*Expo
 	}
 
 	if opts.BatchSize == 0 {
-		opts.BatchSize = batchSizeMax
+		opts.BatchSize = BatchSizeMax
 	}
-	if opts.BatchSize > batchSizeMax {
-		return nil, errors.Errorf("Maximum supported batch size is %d, got %d", batchSizeMax, opts.BatchSize)
+	if opts.BatchSize > BatchSizeMax {
+		return nil, errors.Errorf("Maximum supported batch size is %d, got %d", BatchSizeMax, opts.BatchSize)
+	}
+	if opts.MetricTypePrefix == "" {
+		opts.MetricTypePrefix = MetricTypePrefix
+	}
+	if opts.Lease == nil {
+		opts.Lease = alwaysLease{}
 	}
 
-	e := &Exporter{
-		logger: logger,
-		opts:   opts,
-		nextc:  make(chan struct{}, 1),
-		shards: make([]*shard, shardCount),
+	metricClient, err := newMetricClient(context.Background(), opts)
+	if err != nil {
+		return nil, errors.Wrap(err, "create metric client")
 	}
-	e.seriesCache = newSeriesCache(logger, reg, opts.MetricTypePrefix, e.getExternalLabels, opts.Matchers)
+	e := &Exporter{
+		logger:       logger,
+		opts:         opts,
+		metricClient: metricClient,
+		nextc:        make(chan struct{}, 1),
+		shards:       make([]*shard, shardCount),
+	}
+	e.seriesCache = newSeriesCache(logger, reg, opts.MetricTypePrefix, opts.Matchers)
+
+	// Whenever the lease is lost, clear the series cache so we don't start off of out-of-range
+	// reset timestamps when we gain the lease again.
+	opts.Lease.OnLeaderChange(e.seriesCache.clear)
 
 	for i := range e.shards {
 		e.shards[i] = newShard(shardBufferSize)
@@ -256,10 +287,7 @@ const (
 
 // ApplyConfig updates the exporter state to the given configuration.
 // Must be called at least once before Export() can be used.
-func (e *Exporter) ApplyConfig(cfg *config.Config) error {
-	e.mtx.Lock()
-	defer e.mtx.Unlock()
-
+func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
 	// If project_id, location and cluster were set through explicit flags or auto-discovery,
 	// set them in the external labels. Currently we don't expect a use case where one would want
 	// to override auto-discovery values via external labels.
@@ -288,37 +316,16 @@ func (e *Exporter) ApplyConfig(cfg *config.Config) error {
 	if lset.Get(KeyLocation) == "" {
 		return errors.Errorf("no label %q set via external labels or flag", KeyLocation)
 	}
-	// New external labels invalidate the cached series conversions.
-	if !labels.Equal(e.externalLabels, lset) {
-		e.externalLabels = lset
-		e.seriesCache.invalidateAll()
+	if labels.Equal(e.externalLabels, lset) {
+		return nil
 	}
+	// New external labels possibly invalidate the cached series conversions.
+	e.mtx.Lock()
+	e.externalLabels = lset
+	e.seriesCache.forceRefresh()
+	e.mtx.Unlock()
+
 	return nil
-}
-
-// Generally, global state is not a good approach and actively discouraged throughout
-// the Prometheus code bases. However, this is the most practical way to inject the export
-// path into lower layers of Prometheus without touching an excessive amount of functions
-// in our fork to propagate it.
-var globalExporter *Exporter
-
-// InitGlobal initializes the global instance of the GCM exporter.
-func InitGlobal(logger log.Logger, reg prometheus.Registerer, opts ExporterOpts) (err error) {
-	globalExporter, err = New(logger, reg, opts)
-	return err
-}
-
-// Global returns the global instance of the GCM exporter.
-func Global() *Exporter {
-	if globalExporter == nil {
-		// This should usually be a panic but we set an inactive default exporter in this case
-		// to not break existing tests in Prometheus.
-		fmt.Fprintln(os.Stderr, "No global GCM exporter was set, setting default inactive exporter.")
-		return &Exporter{
-			opts: ExporterOpts{Disable: true},
-		}
-	}
-	return globalExporter
 }
 
 // SetLabelsByIDFunc injects a function that can be used to retrieve a label set
@@ -335,17 +342,22 @@ func (e *Exporter) SetLabelsByIDFunc(f func(uint64) labels.Labels) {
 	e.seriesCache.getLabelsByRef = f
 }
 
-func (e *Exporter) getExternalLabels() labels.Labels {
-	e.mtx.Lock()
-	defer e.mtx.Unlock()
-	return e.externalLabels
-}
-
 // Export enqueues the samples to be written to Cloud Monitoring.
 func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample) {
 	if e.opts.Disable {
 		return
 	}
+
+	e.mtx.Lock()
+	externalLabels := e.externalLabels
+	start, end, ok := e.opts.Lease.Range()
+	e.mtx.Unlock()
+
+	if !ok {
+		prometheusSamplesDiscarded.WithLabelValues("no-ha-range").Inc()
+		return
+	}
+
 	builder := newSampleBuilder(e.seriesCache)
 	defer builder.close()
 
@@ -354,17 +366,33 @@ func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample) {
 			samples []hashedSeries
 			err     error
 		)
-		samples, batch, err = builder.next(metadata, batch)
+		samples, batch, err = builder.next(metadata, externalLabels, batch)
 		if err != nil {
 			level.Debug(e.logger).Log("msg", "building sample failed", "err", err)
 			continue
 		}
 		for _, s := range samples {
-			e.enqueue(s.hash, s.proto)
+			// Only enqueue samples for within our HA range.
+			if sampleInRange(s.proto, start, end) {
+				e.enqueue(s.hash, s.proto)
+			} else {
+				samplesDropped.WithLabelValues("not-in-ha-range").Inc()
+			}
 		}
 	}
 	// Signal that new data is available.
 	e.triggerNext()
+}
+
+func sampleInRange(sample *monitoring_pb.TimeSeries, start, end time.Time) bool {
+	// A sample has exactly one point in the time series. The start timestamp may be unset for gauges.
+	if s := sample.Points[0].Interval.StartTime; s != nil && s.AsTime().Before(start) {
+		return false
+	}
+	if sample.Points[0].Interval.EndTime.AsTime().After(end) {
+		return false
+	}
+	return true
 }
 
 func (e *Exporter) enqueue(hash uint64, sample *monitoring_pb.TimeSeries) {
@@ -382,37 +410,15 @@ func (e *Exporter) triggerNext() {
 // ClientName and Version are used to identify to User Agent. TODO(maxamin): automate versioning.
 const (
 	ClientName = "prometheus-engine-export"
-	Version    = "0.1.1"
+	Version    = "0.2.1"
 )
 
-// Run sends exported samples to Google Cloud Monitoring.
+// Run sends exported samples to Google Cloud Monitoring. Must be called at most once.
+// ApplyConfig must be called once prior to calling Run.
 func (e *Exporter) Run(ctx context.Context) error {
-	clientOpts := []option.ClientOption{
-		option.WithGRPCDialOption(grpc.WithUnaryInterceptor(grpc_prometheus.UnaryClientInterceptor)),
-	}
-	if e.opts.Endpoint != "" {
-		clientOpts = append(clientOpts, option.WithEndpoint(e.opts.Endpoint))
-	}
-	if e.opts.DisableAuth {
-		clientOpts = append(clientOpts,
-			option.WithoutAuthentication(),
-			option.WithGRPCDialOption(grpc.WithInsecure()),
-		)
-	}
-	if e.opts.CredentialsFile != "" {
-		clientOpts = append(clientOpts, option.WithCredentialsFile(e.opts.CredentialsFile))
-	}
-
-	// Identity User Agent for all gRPC requests.
-	clientOpts = append(clientOpts, option.WithUserAgent(ClientName+"/"+Version))
-
-	metricClient, err := monitoring.NewMetricClient(ctx, clientOpts...)
-	if err != nil {
-		return err
-	}
-	defer metricClient.Close()
-
+	defer e.metricClient.Close()
 	go e.seriesCache.run(ctx)
+	go e.opts.Lease.Run(ctx)
 
 	timer := time.NewTimer(batchDelayMax)
 	stopTimer := func() {
@@ -456,7 +462,7 @@ func (e *Exporter) Run(ctx context.Context) error {
 
 	// Send the currently accumulated batch to GCM asynchronously.
 	send := func() {
-		go batch.send(ctx, pendingShards, metricClient.CreateTimeSeries)
+		go batch.send(ctx, pendingShards, e.metricClient.CreateTimeSeries)
 
 		// Reset state for new batch.
 		stopTimer()
@@ -646,6 +652,9 @@ func (m *Matchers) String() string {
 }
 
 func (m *Matchers) Set(s string) error {
+	if s == "" {
+		return nil
+	}
 	ms, err := parser.ParseMetricSelector(s)
 	if err != nil {
 		return errors.Wrapf(err, "invalid metric matcher %q", s)
