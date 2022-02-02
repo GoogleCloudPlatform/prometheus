@@ -16,6 +16,7 @@ package export
 
 import (
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,85 +63,12 @@ func (b *sampleBuilder) close() {
 	}
 }
 
-// MetricMetadata is a copy of MetricMetadata in Prometheus's scrape package.
-// It is copied to break a dependency cycle.
-type MetricMetadata struct {
-	Metric string
-	Type   textparse.MetricType
-	Help   string
-	Unit   string
-}
-
-// MetadataFunc gets metadata for a specific metric name.
-type MetadataFunc func(metric string) (MetricMetadata, bool)
-
-// gaugeMetadata is a MetadataFunc that always returns the gauge type.
-// Help and Unit are left empty.
-func gaugeMetadata(metric string) (MetricMetadata, bool) {
-	return MetricMetadata{
-		Metric: metric,
-		Type:   textparse.MetricTypeGauge,
-	}, true
-}
-
-// Metrics Prometheus writes at scrape time for which no metadata is exposed.
-var internalMetricMetadata = map[string]MetricMetadata{
-	"up": {
-		Metric: "up",
-		Type:   textparse.MetricTypeGauge,
-		Help:   "Up indicates whether the last target scrape was successful.",
-	},
-	"scrape_samples_scraped": {
-		Metric: "scrape_samples_scraped",
-		Type:   textparse.MetricTypeGauge,
-		Help:   "How many samples were scraped during the last successful scrape.",
-	},
-	"scrape_duration_seconds": {
-		Metric: "scrape_duration_seconds",
-		Type:   textparse.MetricTypeGauge,
-		Help:   "Duration of the last scrape.",
-	},
-	"scrape_samples_post_metric_relabeling": {
-		Metric: "scrape_samples_post_metric_relabeling",
-		Type:   textparse.MetricTypeGauge,
-		Help:   "How many samples were ingested after relabeling.",
-	},
-	"scrape_series_added": {
-		Metric: "scrape_series_added",
-		Type:   textparse.MetricTypeGauge,
-		Help:   "Number of new series added in the last scrape.",
-	},
-}
-
-// withScrapeMetricMetadata wraps a MetadataFunc and additionally returns metadata
-// about Prometheues's synthetic scrape-time metrics.
-func withScrapeMetricMetadata(f MetadataFunc) MetadataFunc {
-	// Metadata is nil for metrics ingested through recording or alerting rules.
-	// Unless the rule literally does no processing at all, this always means the
-	// resulting data is a gauge.
-	// This makes it safe to assume a gauge type here in the absence of any other
-	// metadata.
-	// In the future we might want to propagate the rule definition and add it as
-	// help text here to easily understand what produced the metric.
-	if f == nil {
-		f = gaugeMetadata
-	}
-	return func(metric string) (MetricMetadata, bool) {
-		md, ok := internalMetricMetadata[metric]
-		if ok {
-			return md, true
-		}
-		return f(metric)
-	}
-}
-
 // next extracts the next sample from the input sample batch and returns
 // the remainder of the input.
 // Returns a nil time series for samples that couldn't be converted.
-func (b *sampleBuilder) next(metadata MetadataFunc, samples []record.RefSample) ([]hashedSeries, []record.RefSample, error) {
+func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels, samples []record.RefSample) ([]hashedSeries, []record.RefSample, error) {
 	sample := samples[0]
 	tailSamples := samples[1:]
-	metadata = withScrapeMetricMetadata(metadata)
 
 	// Staleness markers are currently not supported by Cloud Monitoring.
 	if value.IsStaleNaN(sample.V) {
@@ -148,7 +76,7 @@ func (b *sampleBuilder) next(metadata MetadataFunc, samples []record.RefSample) 
 		return nil, tailSamples, nil
 	}
 
-	entry, ok := b.series.get(sample, metadata)
+	entry, ok := b.series.get(sample, externalLabels, metadata)
 	if !ok {
 		prometheusSamplesDiscarded.WithLabelValues("no-cache-series-found").Inc()
 		return nil, tailSamples, nil
@@ -188,7 +116,7 @@ func (b *sampleBuilder) next(metadata MetadataFunc, samples []record.RefSample) 
 			// be the same as well.
 			var v *distribution_pb.Distribution
 			var err error
-			v, resetTimestamp, tailSamples, err = b.buildDistribution(entry.metadata.Metric, entry.lset, samples, metadata)
+			v, resetTimestamp, tailSamples, err = b.buildDistribution(entry.metadata.Metric, entry.lset, samples, externalLabels, metadata)
 			if err != nil {
 				return nil, tailSamples, err
 			}
@@ -289,11 +217,33 @@ func (d *distribution) complete() bool {
 	return !d.skip && d.hasSum && d.hasCount && d.hasInfBucket
 }
 
+func (d *distribution) Len() int {
+	return len(d.bounds)
+}
+
+func (d *distribution) Less(i, j int) bool {
+	return d.bounds[i] < d.bounds[j]
+}
+
+func (d *distribution) Swap(i, j int) {
+	d.bounds[i], d.bounds[j] = d.bounds[j], d.bounds[i]
+	d.values[i], d.values[j] = d.values[j], d.values[i]
+}
+
 func (d *distribution) build(lset labels.Labels) (*distribution_pb.Distribution, error) {
-	// Reuse slices we already populated to build final bounds and values.
+	// The exposition format in general requires buckets to be in-order but we observed
+	// some cases in the wild where this was not the case.
+	// Ensure sorting here to gracefully handle those cases sometimes. This cannot handle
+	// all cases. Specifically, if buckets are out-of-order distribution.complete() may
+	// return true before all buckets have been read. Then we will send a distribution
+	// with only a subset of buckets.
+	sort.Sort(d)
+
+	// Populate new values and bounds slices for the final proto as d will be returned to
+	// the memory pool while the proto will be enqueued for sending.
 	var (
-		bounds               = d.bounds[:0]
-		values               = d.values[:0]
+		bounds               = make([]float64, 0, len(d.bounds))
+		values               = make([]int64, 0, len(d.values))
 		prevBound, dev, mean float64
 		prevVal              int64
 	)
@@ -373,6 +323,7 @@ func (b *sampleBuilder) buildDistribution(
 	metric string,
 	matchLset labels.Labels,
 	samples []record.RefSample,
+	externalLabels labels.Labels,
 	metadata MetadataFunc,
 ) (*distribution_pb.Distribution, int64, []record.RefSample, error) {
 	// The Prometheus/OpenMetrics exposition format does not require all histogram series for a single distribution
@@ -383,7 +334,7 @@ func (b *sampleBuilder) buildDistribution(
 	consumed := 0
 Loop:
 	for _, s := range samples {
-		e, ok := b.series.get(s, metadata)
+		e, ok := b.series.get(s, externalLabels, metadata)
 		if !ok {
 			consumed++
 			prometheusSamplesDiscarded.WithLabelValues("no-cache-series-found").Inc()
