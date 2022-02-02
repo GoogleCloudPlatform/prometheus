@@ -53,16 +53,16 @@ require (
 	golang.org/x/net v0.0.0-20210726213435-c6fcb2dbf985
 	golang.org/x/oauth2 v0.0.0-20210514164344-f6687ab2804c
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1
-	golang.org/x/time v0.0.0-20210611083556-38a9dc6acbc6
+	golang.org/x/sys v0.0.0-20210817190340-bfb29a6856f2
+	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac
 	golang.org/x/tools v0.1.5
 	google.golang.org/api v0.48.0
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6
 	gopkg.in/fsnotify/fsnotify.v1 v1.4.7
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b
-	k8s.io/api v0.21.2
-	k8s.io/apimachinery v0.21.2
+	k8s.io/api v0.22.2
+	k8s.io/apimachinery v0.22.2
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/klog v1.0.0
 	k8s.io/klog/v2 v2.9.0
@@ -71,7 +71,7 @@ require (
 replace (
 	// Dependency resolution fails without adding this override. It's not entirely
 	// understandable why but this appears to sufficiently fix it.
-	k8s.io/client-go => k8s.io/client-go v0.21.2
+	k8s.io/client-go => k8s.io/client-go v0.22.2
 
 	k8s.io/klog => github.com/simonpasquier/klog-gokit v0.3.0
 	k8s.io/klog/v2 => github.com/simonpasquier/klog-gokit/v2 v2.1.0
@@ -111,3 +111,5 @@ exclude (
 	k8s.io/client-go v9.0.0+incompatible
 	k8s.io/client-go v9.0.0-invalid+incompatible
 )
+
+replace github.com/GoogleCloudPlatform/prometheus-engine => ../prometheus-engine
