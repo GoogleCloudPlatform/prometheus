@@ -30,8 +30,8 @@ import (
 	"unsafe"
 
 	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
-	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/log/level"
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	config_util "github.com/prometheus/common/config"
