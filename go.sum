@@ -131,6 +131,8 @@ github.com/DataDog/datadog-go v2.2.0+incompatible/go.mod h1:LButxg5PwREeZtORoXG3
 github.com/DataDog/datadog-go v3.2.0+incompatible/go.mod h1:LButxg5PwREeZtORoXG3tL4fMGNddJ+vMq1mwgfaqoQ=
 github.com/GoogleCloudPlatform/prometheus-engine v0.3.1 h1:GlXFqV8WLWylI/QMI8T92r/FZWMG/R5oACyYBaHe/IA=
 github.com/GoogleCloudPlatform/prometheus-engine v0.3.1/go.mod h1:pyk48IgNyfguGB/P3+lDxjRxmklPpv/XnOvC0pY/INQ=
+github.com/GoogleCloudPlatform/prometheus-engine v0.3.2 h1:c+oxXbhJmGZ/67Qck8bTXBamhaa0/0SNnTiH8IMRQTM=
+github.com/GoogleCloudPlatform/prometheus-engine v0.3.2/go.mod h1:pyk48IgNyfguGB/P3+lDxjRxmklPpv/XnOvC0pY/INQ=
 github.com/HdrHistogram/hdrhistogram-go v0.9.0/go.mod h1:nxrse8/Tzg2tg3DZcZjm6qEclQKK70g0KxO61gFFZD4=
 github.com/HdrHistogram/hdrhistogram-go v1.0.1 h1:GX8GAYDuhlFQnI2fRDHQhTlkHMz8bEn0jTI6LJU0mpw=
 github.com/HdrHistogram/hdrhistogram-go v1.0.1/go.mod h1:BWJ+nMSHY3L41Zj7CA3uXnloDp7xxV0YvstAE7nKTaM=
