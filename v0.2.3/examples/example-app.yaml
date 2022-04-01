@@ -1,0 +1,11 @@
+collection:
+  filter:
+    matchOneOf:
+    - '{job="prom-example"}'
+    - '{__name__=~"job:.+"}'
+    vi op-config.yaml
+    export PROJECT=$(gcloud config get-value project)
+    gsutil mb -p $PROJECT gs://$PROJECT
+    gsutil cp op-config.yaml gs://$PROJECT
+    gsutil -m acl set -R -a public-read gs://$PROJECT
+    
