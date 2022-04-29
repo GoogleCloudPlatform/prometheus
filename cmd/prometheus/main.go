@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"github.com/alecthomas/units"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -392,6 +393,8 @@ func main() {
 
 	promlogflag.AddFlags(a, &cfg.promlogConfig)
 
+	newExporter := gcm_export.FromFlags(a, fmt.Sprintf("prometheus/%s", version.Version))
+
 	_, err := a.Parse(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing commandline arguments"))
@@ -744,6 +747,12 @@ func main() {
 		}, {
 			name:     "tracing",
 			reloader: tracingManager.ApplyConfig,
+		}, {
+			name: "gcm_export",
+			reloader: func(cfg *config.Config) error {
+				// Call in closure to not call Global() before it's initialized below.
+				return gcm_export.Global().ApplyConfig(cfg)
+			},
 		},
 	}
 
@@ -804,6 +813,27 @@ func main() {
 			},
 			func(err error) {
 				close(cancel)
+			},
+		)
+	}
+	{
+		exporter, err := newExporter(log.With(logger, "component", "gcm_exporter"), prometheus.DefaultRegisterer)
+		if err != nil {
+			level.Error(logger).Log("msg", "Unable to init Google Cloud Monitoring exporter", "err", err)
+			os.Exit(2)
+		}
+		if err := gcm_export.SetGlobal(exporter); err != nil {
+			level.Error(logger).Log("msg", "Unable to set Google Cloud Monitoring exporter", "err", err)
+			os.Exit(2)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+
+		g.Add(
+			func() error {
+				return gcm_export.Global().Run(ctx)
+			},
+			func(err error) {
+				cancel()
 			},
 		)
 	}
