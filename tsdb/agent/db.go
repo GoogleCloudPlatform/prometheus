@@ -27,6 +27,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
+	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
+	gcm_exportsetup "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"go.uber.org/atomic"
 
 	"github.com/prometheus/prometheus/model/exemplar"
@@ -295,6 +297,10 @@ func Open(l log.Logger, reg prometheus.Registerer, rs *remote.Storage, dir strin
 			return nil, errors.Wrap(err, "repair corrupted WAL")
 		}
 	}
+
+	gcm_exportsetup.Global().SetLabelsByIDFunc(func(id storage.SeriesRef) labels.Labels {
+		return db.series.GetByID(chunks.HeadSeriesRef(id)).lset
+	})
 
 	go db.run()
 	return db, nil
@@ -668,8 +674,12 @@ func (db *DB) ExemplarQuerier(ctx context.Context) (storage.ExemplarQuerier, err
 }
 
 // Appender implements storage.Storage.
-func (db *DB) Appender(_ context.Context) storage.Appender {
-	return db.appenderPool.Get().(storage.Appender)
+func (db *DB) Appender(ctx context.Context) storage.Appender {
+	a := db.appenderPool.Get().(*appender)
+	// Leave metadata getter as nil if it's not contained in the context.
+	a.metadata, _ = gcm_export.MetadataFuncFromContext(ctx)
+
+	return a
 }
 
 // Close implements the Storage interface.
@@ -695,6 +705,8 @@ type appender struct {
 	// Pointers to the series referenced by each element of pendingSamples.
 	// Series lock is not held on elements.
 	sampleSeries []*memSeries
+
+	metadata gcm_export.MetadataFunc
 }
 
 func (a *appender) Append(ref storage.SeriesRef, l labels.Labels, t int64, v float64) (storage.SeriesRef, error) {
@@ -837,6 +849,8 @@ func (a *appender) Commit() error {
 			a.metrics.totalOutOfOrderSamples.Inc()
 		}
 	}
+
+	gcm_exportsetup.Global().Export(a.metadata, a.pendingSamples)
 
 	//nolint:staticcheck
 	a.bufPool.Put(buf)
