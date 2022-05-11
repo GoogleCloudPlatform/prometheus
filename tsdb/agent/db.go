@@ -22,13 +22,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
+	gcm_exportsetup "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
-	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
-	gcm_exportsetup "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"go.uber.org/atomic"
 
 	"github.com/prometheus/prometheus/model/exemplar"

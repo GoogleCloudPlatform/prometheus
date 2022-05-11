@@ -822,7 +822,11 @@ func main() {
 			level.Error(logger).Log("msg", "Unable to init Google Cloud Monitoring exporter", "err", err)
 			os.Exit(2)
 		}
-		gcm_export.SetGlobal(exporter)
+		err = gcm_export.SetGlobal(exporter)
+		if err != nil {
+			level.Error(logger).Log("msg", "Unable to set Google Cloud Monitoring exporter", "err", err)
+			os.Exit(2)
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 
 		g.Add(
