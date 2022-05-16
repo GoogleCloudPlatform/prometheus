@@ -395,7 +395,13 @@ func main() {
 
 	newExporter := gcm_export.FromFlags(a, fmt.Sprintf("prometheus/%s", version.Version))
 
-	_, err := a.Parse(os.Args[1:])
+	extraArgs, err := gcm_export.ExtraArgs()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing commandline arguments"))
+		a.Usage(os.Args[1:])
+		os.Exit(2)
+	}
+	_, err = a.Parse(append(os.Args[1:], extraArgs...))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing commandline arguments"))
 		a.Usage(os.Args[1:])
