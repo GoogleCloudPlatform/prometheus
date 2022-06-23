@@ -28,6 +28,8 @@ GOLANGCI_LINT_OPTS ?= --timeout 4m
 include Makefile.common
 
 DOCKER_IMAGE_NAME       ?= prometheus
+TAG_NAME?=$(shell date "+gmp-%Y%d%m_%H%M")
+PROJECT_ID?=$(shell gcloud config get-value core/project)
 
 .PHONY: update-npm-deps
 update-npm-deps:
@@ -114,3 +116,8 @@ bench_tsdb: $(PROMU)
 	@$(GO) tool pprof --alloc_space -svg $(PROMTOOL) $(TSDB_BENCHMARK_OUTPUT_DIR)/mem.prof > $(TSDB_BENCHMARK_OUTPUT_DIR)/memprof.alloc.svg
 	@$(GO) tool pprof -svg $(PROMTOOL) $(TSDB_BENCHMARK_OUTPUT_DIR)/block.prof > $(TSDB_BENCHMARK_OUTPUT_DIR)/blockprof.svg
 	@$(GO) tool pprof -svg $(PROMTOOL) $(TSDB_BENCHMARK_OUTPUT_DIR)/mutex.prof > $(TSDB_BENCHMARK_OUTPUT_DIR)/mutexprof.svg
+
+.PHONY: cloudbuild
+cloudbuild:  ## Build images on Google Cloud Build.
+	@echo ">> building Multi-arch(AMD64 and ARM64) GMP prometheus images on Cloud Build with tag: $(TAG_NAME)"
+	gcloud builds submit --config cloudbuild.yaml --timeout=2h --substitutions=TAG_NAME="$(TAG_NAME)"
