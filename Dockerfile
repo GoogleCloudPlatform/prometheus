@@ -3,11 +3,12 @@ ARG IMAGE_BUILD_GO=golang:1.17-buster
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/static-debian10:debug
 ARG IMAGE_BASE=gcr.io/distroless/static-debian10
 
-FROM ${IMAGE_BUILD_GO} AS gobase
+FROM --platform=$BUILDPLATFORM ${IMAGE_BUILD_GO} AS gobase
 
 # Compile the UI assets.
-FROM ${IMAGE_BUILD_NODEJS} as assets
+FROM --platform=$BUILDPLATFORM ${IMAGE_BUILD_NODEJS} as assets
 # To build the UI we need a recent node version and the go toolchain.
+ARG TARGETOS TARGETARCH
 RUN install_node v17.9.0
 COPY --from=gobase /usr/local/go /usr/local/
 ENV PATH="/usr/local/go/bin:${PATH}"
@@ -21,14 +22,17 @@ RUN make npm_licenses
 
 # Build the actual Go binary.
 FROM gobase as buildbase
+ARG TARGETOS TARGETARCH
 WORKDIR /app
 COPY --from=assets /app ./
-RUN CGO_ENABLED=0 go build \
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    CGO_ENABLED=0 go build \
     -tags builtinassets -mod=vendor \
     -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
     -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
     ./cmd/prometheus
-RUN CGO_ENABLED=0 go build \
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    CGO_ENABLED=0 go build \
     -mod=vendor \
     -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
     -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
@@ -37,7 +41,7 @@ RUN CGO_ENABLED=0 go build \
 # Configure distroless base image like the upstream Prometheus image.
 # Since the directory and symlink setup needs shell access, we need yet another
 # intermediate stage.
-FROM ${IMAGE_BASE_DEBUG} as appbase
+FROM --platform=$BUILDPLATFORM ${IMAGE_BASE_DEBUG} as appbase
 
 COPY documentation/examples/prometheus.yml  /etc/prometheus/prometheus.yml
 COPY console_libraries/                     /usr/share/prometheus/console_libraries/
@@ -45,7 +49,7 @@ COPY consoles/                              /usr/share/prometheus/consoles/
 RUN ["/busybox/sh", "-c", "ln -s /usr/share/prometheus/console_libraries /usr/share/prometheus/consoles/ /etc/prometheus/"]
 RUN ["/busybox/sh", "-c", "mkdir -p /prometheus"]
 
-FROM ${IMAGE_BASE}
+FROM --platform=$BUILDPLATFORM ${IMAGE_BASE}
 
 COPY --from=buildbase /app/prometheus /bin/prometheus
 COPY --from=buildbase /app/promtool /bin/promtool
