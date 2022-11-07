@@ -288,6 +288,7 @@ func Open(l log.Logger, reg prometheus.Registerer, rs *remote.Storage, dir strin
 			pendingSeries:    make([]record.RefSeries, 0, 100),
 			pendingSamples:   make([]record.RefSample, 0, 100),
 			pendingExamplars: make([]record.RefExemplar, 0, 10),
+			exportExemplars:  make(map[storage.SeriesRef]record.RefExemplar, 10),
 		}
 	}
 
@@ -707,6 +708,9 @@ type appender struct {
 	sampleSeries []*memSeries
 
 	metadata gcm_export.MetadataFunc
+
+	// exemplars to be exported to GCM
+	exportExemplars map[storage.SeriesRef]record.RefExemplar
 }
 
 func (a *appender) Append(ref storage.SeriesRef, l labels.Labels, t int64, v float64) (storage.SeriesRef, error) {
@@ -799,13 +803,14 @@ func (a *appender) AppendExemplar(ref storage.SeriesRef, l labels.Labels, e exem
 			return 0, storage.ErrExemplarLabelLength
 		}
 	}
-
-	a.pendingExamplars = append(a.pendingExamplars, record.RefExemplar{
+	refEx := record.RefExemplar{
 		Ref:    s.ref,
 		T:      e.Ts,
 		V:      e.Value,
 		Labels: e.Labels,
-	})
+	}
+	a.pendingExamplars = append(a.pendingExamplars, refEx)
+	a.exportExemplars[storage.SeriesRef(headRef)] = refEx
 
 	return storage.SeriesRef(s.ref), nil
 }
@@ -850,7 +855,7 @@ func (a *appender) Commit() error {
 		}
 	}
 
-	gcm_exportsetup.Global().Export(a.metadata, a.pendingSamples)
+	gcm_exportsetup.Global().Export(a.metadata, a.pendingSamples, a.exportExemplars)
 
 	//nolint:staticcheck
 	a.bufPool.Put(buf)
@@ -862,6 +867,7 @@ func (a *appender) Rollback() error {
 	a.pendingSamples = a.pendingSamples[:0]
 	a.pendingExamplars = a.pendingExamplars[:0]
 	a.sampleSeries = a.sampleSeries[:0]
+	a.exportExemplars = make(map[storage.SeriesRef]record.RefExemplar, len(a.pendingExamplars))
 	a.appenderPool.Put(a)
 	return nil
 }
