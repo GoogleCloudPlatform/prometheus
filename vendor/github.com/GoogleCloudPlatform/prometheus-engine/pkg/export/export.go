@@ -46,9 +46,17 @@ var (
 		Name: "gcm_export_samples_exported_total",
 		Help: "Number of samples exported at scrape time.",
 	})
+	exemplarsExported = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gcm_export_exemplars_exported_total",
+		Help: "Number of exemplars exported at scrape time.",
+	})
 	samplesDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "gcm_export_samples_dropped_total",
-		Help: "Number of exported samples that were dropped because shard queues were full.",
+		Help: "Number of exported samples that were intentionally dropped.",
+	}, []string{"reason"})
+	exemplarsDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "gcm_export_exemplars_dropped_total",
+		Help: "Number of exported exemplars that were intentionally dropped.",
 	}, []string{"reason"})
 	samplesSent = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "gcm_export_samples_sent_total",
@@ -87,6 +95,10 @@ var (
 		// Limit buckets to 200, which is the real-world batch size for GCM.
 		Buckets: []float64{1, 2, 5, 10, 20, 50, 100, 150, 200},
 	})
+	ErrLocationGlobal = errors.New("Location must be set to a named Google Cloud " +
+		"region and cannot be set to \"global\". Please choose the " +
+		"Google Cloud region that is physically nearest to your cluster. " +
+		"See https://www.cloudinfrastructuremap.com/")
 )
 
 // Exporter converts Prometheus samples into Cloud Monitoring samples and exports them.
@@ -145,8 +157,13 @@ type ExporterOpts struct {
 	CredentialsFile string
 	// Disable authentication (for debugging purposes).
 	DisableAuth bool
-	// A user agent string added as a suffix to the regular user agent.
-	UserAgent string
+	// A user agent product string added to the regular user agent.
+	// See: https://www.rfc-editor.org/rfc/rfc7231#section-5.5.3
+	UserAgentProduct string
+	// A string added as a suffix to the regular user agent.
+	UserAgentMode string
+	// UserAgentEnv where calls to GCM API are made.
+	UserAgentEnv string
 
 	// Default monitored resource fields set on exported data.
 	ProjectID string
@@ -215,7 +232,8 @@ func (alwaysLease) OnLeaderChange(f func()) {
 
 func newMetricClient(ctx context.Context, opts ExporterOpts) (*monitoring.MetricClient, error) {
 	// Identity User Agent for all gRPC requests.
-	ua := strings.TrimSpace(fmt.Sprintf("%s/%s %s", ClientName, Version, opts.UserAgent))
+	ua := strings.TrimSpace(fmt.Sprintf("%s/%s %s (env:%s;mode:%s)",
+		ClientName, Version, opts.UserAgentProduct, opts.UserAgentEnv, opts.UserAgentMode))
 
 	clientOpts := []option.ClientOption{
 		option.WithGRPCDialOption(grpc.WithUnaryInterceptor(grpc_prometheus.UnaryClientInterceptor)),
@@ -348,8 +366,10 @@ func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
 	if lset.Get(KeyProjectID) == "" {
 		return errors.Errorf("no label %q set via external labels or flag", KeyProjectID)
 	}
-	if lset.Get(KeyLocation) == "" {
+	if loc := lset.Get(KeyLocation); loc == "" {
 		return errors.Errorf("no label %q set via external labels or flag", KeyLocation)
+	} else if loc == "global" {
+		return ErrLocationGlobal
 	}
 	if labels.Equal(e.externalLabels, lset) {
 		return nil
@@ -377,8 +397,13 @@ func (e *Exporter) SetLabelsByIDFunc(f func(storage.SeriesRef) labels.Labels) {
 	e.seriesCache.getLabelsByRef = f
 }
 
-// Export enqueues the samples to be written to Cloud Monitoring.
-func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample) {
+// Export enqueues the samples and exemplars to be written to Cloud Monitoring.
+func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample, exemplarMap map[storage.SeriesRef]record.RefExemplar) {
+	// Wether we're sending data or not, add batchsize of samples exported by
+	// Prometheus from appender commit.
+	batchSize := len(batch)
+	samplesExported.Add(float64(batchSize))
+
 	if e.opts.Disable {
 		return
 	}
@@ -391,19 +416,20 @@ func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample) {
 	e.mtx.Unlock()
 
 	if !ok {
-		prometheusSamplesDiscarded.WithLabelValues("no-ha-range").Inc()
+		exemplarsDropped.WithLabelValues("no-ha-range").Add(float64(len(exemplarMap)))
+		samplesDropped.WithLabelValues("no-ha-range").Add(float64(batchSize))
 		return
 	}
-
 	builder := newSampleBuilder(e.seriesCache)
 	defer builder.close()
+	exemplarsExported.Add(float64(len(exemplarMap)))
 
 	for len(batch) > 0 {
 		var (
 			samples []hashedSeries
 			err     error
 		)
-		samples, batch, err = builder.next(metadata, externalLabels, batch)
+		samples, batch, err = builder.next(metadata, externalLabels, batch, exemplarMap)
 		if err != nil {
 			level.Debug(e.logger).Log("msg", "building sample failed", "err", err)
 			continue
@@ -413,6 +439,11 @@ func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample) {
 			if sampleInRange(s.proto, start, end) {
 				e.enqueue(s.hash, s.proto)
 			} else {
+				// Hashed series protos should only ever have one point. If this is
+				// a distribution increase exemplarsDropped if there are exemplars.
+				if dist := s.proto.Points[0].Value.GetDistributionValue(); dist != nil {
+					exemplarsDropped.WithLabelValues("not-in-ha-range").Add(float64(len(dist.GetExemplars())))
+				}
 				samplesDropped.WithLabelValues("not-in-ha-range").Inc()
 			}
 		}
@@ -447,7 +478,7 @@ func (e *Exporter) triggerNext() {
 // ClientName and Version are used to identify to User Agent. TODO(maxamin): automate versioning.
 const (
 	ClientName = "prometheus-engine-export"
-	Version    = "0.4.1"
+	Version    = "0.6.0"
 )
 
 // Run sends exported samples to Google Cloud Monitoring. Must be called at most once.

@@ -444,6 +444,7 @@ func (a *headAppender) Commit() (err error) {
 	}
 
 	// No errors logging to WAL, so pass the exemplars along to the in memory storage.
+	exportExemplars := make(map[storage.SeriesRef]record.RefExemplar, len(a.exemplars))
 	for _, e := range a.exemplars {
 		s := a.head.series.getByID(chunks.HeadSeriesRef(e.ref))
 		// We don't instrument exemplar appends here, all is instrumented by storage.
@@ -452,6 +453,12 @@ func (a *headAppender) Commit() (err error) {
 				continue
 			}
 			level.Debug(a.head.logger).Log("msg", "Unknown error while adding exemplar", "err", err)
+		}
+		exportExemplars[e.ref] = record.RefExemplar{
+			Ref:    chunks.HeadSeriesRef(e.ref),
+			T:      e.exemplar.Ts,
+			V:      e.exemplar.Value,
+			Labels: e.exemplar.Labels,
 		}
 	}
 
@@ -484,7 +491,7 @@ func (a *headAppender) Commit() (err error) {
 	a.head.metrics.samplesAppended.Add(float64(total))
 	a.head.updateMinMaxTime(a.mint, a.maxt)
 
-	gcm_exportsetup.Global().Export(a.metadata, a.samples)
+	gcm_exportsetup.Global().Export(a.metadata, a.samples, exportExemplars)
 
 	return nil
 }
