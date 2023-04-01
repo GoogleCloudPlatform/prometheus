@@ -33,6 +33,7 @@ github.com/GoogleCloudPlatform/prometheus-engine/pkg/export
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/lease
 # github.com/Microsoft/go-winio v0.5.1
+## explicit
 github.com/Microsoft/go-winio
 github.com/Microsoft/go-winio/pkg/guid
 # github.com/PuerkitoBio/purell v1.1.1
@@ -105,11 +106,6 @@ github.com/cespare/xxhash/v2
 github.com/cncf/xds/go/udpa/annotations
 github.com/cncf/xds/go/xds/annotations/v3
 github.com/cncf/xds/go/xds/core/v3
-# github.com/containerd/containerd v1.6.1
-## explicit
-github.com/containerd/containerd/errdefs
-github.com/containerd/containerd/log
-github.com/containerd/containerd/platforms
 # github.com/davecgh/go-spew v1.1.1
 github.com/davecgh/go-spew/spew
 # github.com/dennwc/varint v1.0.0
@@ -125,8 +121,7 @@ github.com/digitalocean/godo/metrics
 # github.com/docker/distribution v2.7.1+incompatible
 github.com/docker/distribution/digestset
 github.com/docker/distribution/reference
-github.com/docker/distribution/registry/api/errcode
-# github.com/docker/docker v20.10.14+incompatible
+# github.com/docker/docker v23.0.2+incompatible
 ## explicit
 github.com/docker/docker/api
 github.com/docker/docker/api/types
@@ -341,12 +336,16 @@ github.com/grpc-ecosystem/grpc-gateway/v2/utilities
 # github.com/hashicorp/consul/api v1.12.0
 ## explicit
 github.com/hashicorp/consul/api
+# github.com/hashicorp/errwrap v1.1.0
+## explicit
 # github.com/hashicorp/go-cleanhttp v0.5.2
 github.com/hashicorp/go-cleanhttp
 # github.com/hashicorp/go-hclog v0.16.2
 github.com/hashicorp/go-hclog
 # github.com/hashicorp/go-immutable-radix v1.3.1
 github.com/hashicorp/go-immutable-radix
+# github.com/hashicorp/go-multierror v1.1.1
+## explicit
 # github.com/hashicorp/go-rootcerts v1.0.2
 github.com/hashicorp/go-rootcerts
 # github.com/hashicorp/golang-lru v0.5.4
@@ -479,8 +478,6 @@ github.com/scaleway/scaleway-sdk-go/validation
 ## explicit
 github.com/shurcooL/httpfs/filter
 github.com/shurcooL/httpfs/union
-# github.com/sirupsen/logrus v1.8.1
-github.com/sirupsen/logrus
 # github.com/spf13/pflag v1.0.5
 github.com/spf13/pflag
 # github.com/stretchr/testify v1.7.1
@@ -808,6 +805,8 @@ google.golang.org/protobuf/types/pluginpb
 # gopkg.in/alecthomas/kingpin.v2 v2.2.6
 ## explicit
 gopkg.in/alecthomas/kingpin.v2
+# gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
+## explicit
 # gopkg.in/inf.v0 v0.9.1
 gopkg.in/inf.v0
 # gopkg.in/yaml.v2 v2.4.0
