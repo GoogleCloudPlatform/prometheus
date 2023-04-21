@@ -37,7 +37,7 @@ func TestStartupInterrupt(t *testing.T) {
 
 	port := fmt.Sprintf(":%d", testutil.RandomUnprivilegedPort(t))
 
-	prom := exec.Command(promPath, "-test.main", "--config.file="+promConfig, "--storage.tsdb.path="+t.TempDir(), "--web.listen-address=0.0.0.0"+port)
+	prom := exec.Command(promPath, "-test.main", "--config.file="+promConfig, "--storage.tsdb.path="+t.TempDir(), "--web.listen-address=0.0.0.0"+port, "--export.debug.disable-auth")
 	err := prom.Start()
 	require.NoError(t, err)
 
