@@ -46,6 +46,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
 	github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f
 	github.com/nsf/jsondiff v0.0.0-20230430225905-43f6cf3098c1
+	github.com/oklog/run v1.1.0
 	github.com/oklog/ulid v1.3.1
 	github.com/ovh/go-ovh v1.5.1
 	github.com/prometheus/alertmanager v0.27.0
@@ -69,6 +70,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.27.0
 	go.opentelemetry.io/otel/trace v1.27.0
 	go.uber.org/atomic v1.11.0
+	go.uber.org/automaxprocs v1.6.0
 	go.uber.org/goleak v1.3.0
 	go.uber.org/multierr v1.11.0
 	golang.org/x/net v0.34.0
@@ -86,6 +88,8 @@ require (
 	k8s.io/api v0.30.0
 	k8s.io/apimachinery v0.30.2
 	k8s.io/client-go v0.29.3
+	k8s.io/klog v1.0.0
+	k8s.io/klog/v2 v2.120.1
 )
 
 require (
@@ -112,6 +116,7 @@ require (
 	github.com/fatih/color v1.16.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
+	github.com/go-kit/kit v0.10.0 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/analysis v0.22.2 // indirect
@@ -187,7 +192,6 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gotest.tools/v3 v3.0.3 // indirect
-	k8s.io/klog/v2 v2.120.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340 // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
