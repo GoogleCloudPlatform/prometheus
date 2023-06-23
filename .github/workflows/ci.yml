@@ -3,6 +3,8 @@ name: CI
 on:  # yamllint disable-line rule:truthy
   pull_request:
   push:
+env:
+  GIT_TAG: v0.7.1
 jobs:
   test_go:
     name: Go tests
