@@ -1,6 +1,11 @@
 ---
 extends: default
 
+ignore: |
+  vendor/
+  web/ui/node_modules/
+  documentation/examples/*/vendor/
+
 rules:
   braces:
     max-spaces-inside: 1
