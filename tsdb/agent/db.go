@@ -310,7 +310,11 @@ func Open(l log.Logger, reg prometheus.Registerer, rs *remote.Storage, dir strin
 	}
 
 	gcm_exportsetup.Global().SetLabelsByIDFunc(func(id storage.SeriesRef) labels.Labels {
-		return db.series.GetByID(chunks.HeadSeriesRef(id)).lset
+		series := db.series.GetByID(chunks.HeadSeriesRef(id))
+		if series == nil {
+			return labels.EmptyLabels()
+		}
+		return series.lset
 	})
 
 	go db.run()
