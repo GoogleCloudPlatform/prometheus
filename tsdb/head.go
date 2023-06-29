@@ -281,7 +281,11 @@ func NewHead(r prometheus.Registerer, l log.Logger, wal, wbl *wlog.WL, opts *Hea
 	}
 
 	gcm_exportsetup.Global().SetLabelsByIDFunc(func(id storage.SeriesRef) labels.Labels {
-		return h.series.getByID(chunks.HeadSeriesRef(id)).lset
+		series := h.series.getByID(chunks.HeadSeriesRef(id))
+		if series == nil {
+			return labels.EmptyLabels()
+		}
+		return series.lset
 	})
 
 	return h, nil
