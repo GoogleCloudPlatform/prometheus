@@ -117,7 +117,7 @@ func newMetrics(r prometheus.Registerer) *metrics {
 		requestCounter: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "prometheus_http_requests_total",
-				Help: "Counter of HTTP requests.",
+				Help: "Counter of HTTP requests. Testing Saket's prombench integration! 💪🏽🏄🏽‍♀️🔥",
 			},
 			[]string{"handler", "code"},
 		),
