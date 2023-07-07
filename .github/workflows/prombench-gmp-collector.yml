@@ -10,8 +10,8 @@ on:
 
 env:
   CANCEL_BENCHMARK: "false"
-  CLUSTER_NAME: "prombench"
-  COLLECTOR_IMAGE_REPOSITORY: "gke.gcr.io/prometheus-engine/prometheus"
+  CLUSTER_NAME: prombench
+  COLLECTOR_IMAGE_REPOSITORY: gke.gcr.io/prometheus-engine/prometheus
   CREATE_CLUSTER: "true"
   DASHBOARD_ID: 33755240-08f9-4db9-a86f-839481fd5002
   DISABLE_LOADGEN_QUERIER: "true"
@@ -24,7 +24,6 @@ env:
   LAST_COMMIT_SHA: ${{ github.event.client_payload.LAST_COMMIT_SHA }}
   OAUTH_TOKEN: ""
   PR_NUMBER: ${{github.event.issue.number}}
-  PROMBENCH_DOCKER_IMAGE_REPOSITORY: "docker://saketjajoo/prombench:latest"
   PROVIDER: gke
   RELEASE: ${{ github.event.repository.default_branch }} # e.g. main / release-X.Y.Z-gmp / etc.
   SERVICEACCOUNT_CLIENT_EMAIL: ${{ secrets.SERVICEACCOUNT_CLIENT_EMAIL }}
@@ -75,7 +74,7 @@ jobs:
         run: |
           GMP_COLLECTOR_TAG=$(echo ${{ github.event.comment.body }} | head -n 1 | awk '{ print $2 }')
 
-          if [ "$2" == "cancel" ]
+          if [ "${GMP_COLLECTOR_TAG}" == "cancel" ]
           then
             
             echo "Cancelling the benchmark run for PR #${PR_NUMBER}."
@@ -131,19 +130,19 @@ jobs:
       
       - name: cluster_create
         if: env.CREATE_CLUSTER == 'true'
-        uses: ${PROMBENCH_DOCKER_IMAGE_REPOSITORY}
+        uses: docker://saketjajoo/prombench:latest
         with:
             args: make cluster_create;
       
       - name: cluster_resource_apply
         if: env.CREATE_CLUSTER == 'true'
-        uses: ${PROMBENCH_DOCKER_IMAGE_REPOSITORY}
+        uses: docker://saketjajoo/prombench:latest
         with:
             args: make cluster_resource_apply;
       
       - name: node_create
         if: env.CANCEL_BENCHMARK == 'false'
-        uses: ${PROMBENCH_DOCKER_IMAGE_REPOSITORY}
+        uses: docker://saketjajoo/prombench:latest
         with:
             args: >-
               make clean;
@@ -152,7 +151,7 @@ jobs:
       
       - name: node_resource_apply
         if: env.CANCEL_BENCHMARK == 'false'
-        uses: ${PROMBENCH_DOCKER_IMAGE_REPOSITORY}
+        uses: docker://saketjajoo/prombench:latest
         with:
             args: make resource_apply;
 
@@ -175,6 +174,6 @@ jobs:
       
       - name: node_delete
         if: env.CANCEL_BENCHMARK == 'true'
-        uses: ${PROMBENCH_DOCKER_IMAGE_REPOSITORY}
+        uses: docker://saketjajoo/prombench:latest
         with:
             args: make clean;
