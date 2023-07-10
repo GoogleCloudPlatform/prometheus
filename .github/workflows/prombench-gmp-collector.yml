@@ -11,7 +11,7 @@ on:
 env:
   CANCEL_BENCHMARK: "false"
   CLUSTER_NAME: prombench
-  COLLECTOR_IMAGE_REPOSITORY: gke.gcr.io/prometheus-engine/prometheus
+  PROMETHEUS_IMAGE_REPOSITORY: gke.gcr.io/prometheus-engine/prometheus
   CREATE_CLUSTER: "true"
   DASHBOARD_ID: 8dc0ed11-c0bd-4fb3-9cdf-1ef8ae04bdad
   DISABLE_LOADGEN_QUERIER: "true"
@@ -86,30 +86,30 @@ jobs:
             echo "GMP Collector Tag: ${GMP_COLLECTOR_TAG}"
 
             function get_default_collector_tag() {
-              DEFAULT_COLLECTOR_TAG=$(gcloud container images list-tags ${COLLECTOR_IMAGE_REPOSITORY} --sort-by=UPDATE_TIME,TAGS | tail -1 | awk '{ print $2 }')
+              DEFAULT_COLLECTOR_TAG=$(gcloud container images list-tags ${PROMETHEUS_IMAGE_REPOSITORY} --sort-by=UPDATE_TIME,TAGS | tail -1 | awk '{ print $2 }')
             }
 
             if [[ $GMP_COLLECTOR_TAG == '' ]]
             then
               echo "Since the collector version is missing, the latest one would be used."
               get_default_collector_tag
-              echo "COLLECTOR_RELEASE_VERSION=${DEFAULT_COLLECTOR_TAG}" >> $GITHUB_ENV
-              export COLLECTOR_RELEASE_VERSION="${DEFAULT_COLLECTOR_TAG}"
+              echo "PROMETHEUS_IMAGE_VERSION=${DEFAULT_COLLECTOR_TAG}" >> $GITHUB_ENV
+              export PROMETHEUS_IMAGE_VERSION="${DEFAULT_COLLECTOR_TAG}"
             else
-              GCLOUD_TAG=$(gcloud container images list-tags --filter="tags:${GMP_COLLECTOR_TAG}" --format=json ${COLLECTOR_IMAGE_REPOSITORY})
+              GCLOUD_TAG=$(gcloud container images list-tags --filter="tags:${GMP_COLLECTOR_TAG}" --format=json ${PROMETHEUS_IMAGE_REPOSITORY})
               if [[ "$GCLOUD_TAG" == "[]" ]]
               then
-                echo "The ${COLLECTOR_IMAGE_REPOSITORY} image does not have the ${GMP_COLLECTOR_TAG} tag. Hence, this run will use the default latest tag."
+                echo "The ${PROMETHEUS_IMAGE_REPOSITORY} image does not have the ${GMP_COLLECTOR_TAG} tag. Hence, this run will use the default latest tag."
                 DEFAULT_COLLECTOR_TAG=$(get_default_collector_tag)
-                echo "COLLECTOR_RELEASE_VERSION=${DEFAULT_COLLECTOR_TAG}" >> $GITHUB_ENV
-                export COLLECTOR_RELEASE_VERSION="${DEFAULT_COLLECTOR_TAG}"
+                echo "PROMETHEUS_IMAGE_VERSION=${DEFAULT_COLLECTOR_TAG}" >> $GITHUB_ENV
+                export PROMETHEUS_IMAGE_VERSION="${DEFAULT_COLLECTOR_TAG}"
               else
-                echo "COLLECTOR_RELEASE_VERSION=${GMP_COLLECTOR_TAG}" >> $GITHUB_ENV
-                export COLLECTOR_RELEASE_VERSION="${GMP_COLLECTOR_TAG}"
+                echo "PROMETHEUS_IMAGE_VERSION=${GMP_COLLECTOR_TAG}" >> $GITHUB_ENV
+                export PROMETHEUS_IMAGE_VERSION="${GMP_COLLECTOR_TAG}"
               fi
             fi
             
-            echo "The release/base GMP Collector's tag is set to: ${COLLECTOR_RELEASE_VERSION}."
+            echo "The release/base GMP Collector's tag is set to: ${PROMETHEUS_IMAGE_VERSION}."
 
           fi
 
@@ -120,7 +120,7 @@ jobs:
         run: |
           MONITORING_DASHBOARD_URL="https://console.cloud.google.com/monitoring/dashboards/builder/${DASHBOARD_ID};duration=PT15M"
           
-          COMMENT_MSG="This benchmark run compares this PR (https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/pull/${PR_NUMBER}) with version \`${COLLECTOR_RELEASE_VERSION}\` of the [GMP Collector](https://cloud.google.com/stackdriver/docs/managed-prometheus/setup-managed).\n\nAfter a successful deployment, the benchmarking results can be viewed on the [Cloud Monitoring Dashboard](${MONITORING_DASHBOARD_URL}).\n\nTo cancel or stop the benchmark run, comment \`/prombench cancel\` on this PR."
+          COMMENT_MSG="This benchmark run compares this PR (https://github.com/${GITHUB_ORG}/${GITHUB_REPO}/pull/${PR_NUMBER}) with version \`${PROMETHEUS_IMAGE_VERSION}\` of the [GMP Collector](https://cloud.google.com/stackdriver/docs/managed-prometheus/setup-managed).\n\nAfter a successful deployment, the benchmarking results can be viewed on the [Cloud Monitoring Dashboard](${MONITORING_DASHBOARD_URL}).\n\nTo cancel or stop the benchmark run, comment \`/prombench cancel\` on this PR."
 
           curl --silent -L -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
