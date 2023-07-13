@@ -223,6 +223,7 @@ func main() {
 			Registerer: prometheus.DefaultRegisterer,
 			Gatherer:   prometheus.DefaultGatherer,
 		},
+		promlogConfig: promlog.Config{},
 	}
 
 	a := kingpin.New(filepath.Base(os.Args[0]), "The Prometheus monitoring server").UsageWriter(os.Stdout)
@@ -407,7 +408,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	logger := log.NewJSONLogger(log.NewSyncWriter(os.Stdout))
+	logger := log.NewJSONLogger(log.NewSyncWriter(os.Stderr))
 
 	if err := cfg.setFeatureListOptions(logger); err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing feature list"))
