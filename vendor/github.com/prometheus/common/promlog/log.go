@@ -113,7 +113,7 @@ type Config struct {
 func New(config *Config) log.Logger {
 	var l log.Logger
 	if config.Format != nil && config.Format.s == "json" {
-		l = log.NewJSONLogger(log.NewSyncWriter(os.Stderr))
+		l = log.NewJSONLogger(log.NewSyncWriter(os.Stdout))
 	} else {
 		l = log.NewLogfmtLogger(log.NewSyncWriter(os.Stderr))
 	}
