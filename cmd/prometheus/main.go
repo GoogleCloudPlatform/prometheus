@@ -214,8 +214,6 @@ func main() {
 		oldFlagRetentionDuration model.Duration
 		newFlagRetentionDuration model.Duration
 	)
-	af := promlog.AllowedFormat{}
-	af.Set("json")
 
 	cfg := flagConfig{
 		notifier: notifier.Options{
@@ -225,7 +223,6 @@ func main() {
 			Registerer: prometheus.DefaultRegisterer,
 			Gatherer:   prometheus.DefaultGatherer,
 		},
-		promlogConfig: promlog.Config{Format: &af},
 	}
 
 	a := kingpin.New(filepath.Base(os.Args[0]), "The Prometheus monitoring server").UsageWriter(os.Stdout)
@@ -410,7 +407,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	logger := promlog.New(&cfg.promlogConfig)
+	logger := log.NewJSONLogger(log.NewSyncWriter(os.Stdout))
 
 	if err := cfg.setFeatureListOptions(logger); err != nil {
 		fmt.Fprintln(os.Stderr, errors.Wrapf(err, "Error parsing feature list"))
