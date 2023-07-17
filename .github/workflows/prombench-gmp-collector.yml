@@ -38,7 +38,7 @@ jobs:
       pull-requests: write
     steps:
 
-      - name: verify_user
+      - name: 'User Verification'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENTER: ${{ github.event.comment.user.login }}
@@ -70,7 +70,7 @@ jobs:
         uses: 'google-github-actions/setup-gcloud@v1'
 
       
-      - name: check_benchmark_trigger_action
+      - name: 'Set environment variables based on the triggered action'
         run: |
           GMP_COLLECTOR_TAG=$(echo ${{ github.event.comment.body }} | head -n 1 | awk '{ print $2 }')
 
@@ -113,7 +113,7 @@ jobs:
 
           fi
 
-      - name: post_comment_to_pr
+      - name: 'Post a comment to the PR upon triggering the benchmark run'
         if: env.CANCEL_BENCHMARK == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -128,7 +128,7 @@ jobs:
             --data '{ "body": "'"${COMMENT_MSG}"'" }'
 
       
-      - name: check_cluster_existance
+      - name: 'Check if the cluster exists'
         run: |
           if RETURN=$(gcloud container clusters describe "${CLUSTER_NAME}" --project="${GKE_PROJECT_ID}" --location="${ZONE}" >/dev/null 2>&1)
           then
@@ -142,19 +142,19 @@ jobs:
           fi
 
       
-      - name: cluster_create
+      - name: 'Create the cluster'
         if: env.CREATE_CLUSTER == 'true'
         uses: docker://saketjajoo/prombench:latest
         with:
             args: make cluster_create;
       
-      - name: cluster_resource_apply
+      - name: 'Apply the cluster resources (to the main node)'
         if: env.CREATE_CLUSTER == 'true'
         uses: docker://saketjajoo/prombench:latest
         with:
             args: make cluster_resource_apply;
       
-      - name: node_create
+      - name: 'Create the nodes'
         if: env.CANCEL_BENCHMARK == 'false'
         uses: docker://saketjajoo/prombench:latest
         with:
@@ -163,13 +163,13 @@ jobs:
               until make all_nodes_deleted; do echo "Waiting for nodepools to be deleted"; sleep 10; done;
               make node_create;
       
-      - name: node_resource_apply
+      - name: 'Apply the node resources (benchmark-related deployments)'
         if: env.CANCEL_BENCHMARK == 'false'
         uses: docker://saketjajoo/prombench:latest
         with:
             args: make resource_apply;
       
-      - name: node_delete
+      - name: 'Delete the nodes'
         if: env.CANCEL_BENCHMARK == 'true'
         uses: docker://saketjajoo/prombench:latest
         with:
