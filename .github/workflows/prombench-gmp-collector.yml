@@ -71,9 +71,9 @@ jobs:
       
       - name: 'Set environment variables based on the triggered action'
         run: |
-          GMP_COLLECTOR_TAG=$(echo ${{ github.event.comment.body }} | head -n 1 | awk '{ print $2 }')
+          COLLECTOR_TAG_OR_CANCEL=$(echo ${{ github.event.comment.body }} | head -n 1 | awk '{ print $2 }')
 
-          if [ "${GMP_COLLECTOR_TAG}" == "cancel" ]
+          if [ "${COLLECTOR_TAG_OR_CANCEL}" == "cancel" ]
           then
             
             echo "Cancelling the benchmark run for PR #${PR_NUMBER}."
@@ -82,29 +82,29 @@ jobs:
 
           else
             
-            echo "GMP Collector Tag: ${GMP_COLLECTOR_TAG}"
+            echo "GMP Collector Tag: ${COLLECTOR_TAG_OR_CANCEL}"
 
             function get_default_collector_tag() {
               DEFAULT_COLLECTOR_TAG=$(gcloud container images list-tags ${PROMETHEUS_IMAGE_REPOSITORY} --sort-by=UPDATE_TIME,TAGS | tail -1 | awk '{ print $2 }')
             }
 
-            if [[ $GMP_COLLECTOR_TAG == '' ]]
+            if [[ $COLLECTOR_TAG_OR_CANCEL == '' ]]
             then
               echo "Since the collector version is missing, the latest one would be used."
               get_default_collector_tag
               echo "PROMETHEUS_IMAGE_VERSION=${DEFAULT_COLLECTOR_TAG}" >> $GITHUB_ENV
               export PROMETHEUS_IMAGE_VERSION="${DEFAULT_COLLECTOR_TAG}"
             else
-              GCLOUD_TAG=$(gcloud container images list-tags --filter="tags:${GMP_COLLECTOR_TAG}" --format=json ${PROMETHEUS_IMAGE_REPOSITORY})
+              GCLOUD_TAG=$(gcloud container images list-tags --filter="tags:${COLLECTOR_TAG_OR_CANCEL}" --format=json ${PROMETHEUS_IMAGE_REPOSITORY})
               if [[ "$GCLOUD_TAG" == "[]" ]]
               then
-                echo "The ${PROMETHEUS_IMAGE_REPOSITORY} image does not have the ${GMP_COLLECTOR_TAG} tag. Hence, this run will use the default latest tag."
+                echo "The ${PROMETHEUS_IMAGE_REPOSITORY} image does not have the ${COLLECTOR_TAG_OR_CANCEL} tag. Hence, this run will use the default latest tag."
                 DEFAULT_COLLECTOR_TAG=$(get_default_collector_tag)
                 echo "PROMETHEUS_IMAGE_VERSION=${DEFAULT_COLLECTOR_TAG}" >> $GITHUB_ENV
                 export PROMETHEUS_IMAGE_VERSION="${DEFAULT_COLLECTOR_TAG}"
               else
-                echo "PROMETHEUS_IMAGE_VERSION=${GMP_COLLECTOR_TAG}" >> $GITHUB_ENV
-                export PROMETHEUS_IMAGE_VERSION="${GMP_COLLECTOR_TAG}"
+                echo "PROMETHEUS_IMAGE_VERSION=${COLLECTOR_TAG_OR_CANCEL}" >> $GITHUB_ENV
+                export PROMETHEUS_IMAGE_VERSION="${COLLECTOR_TAG_OR_CANCEL}"
               fi
             fi
             
