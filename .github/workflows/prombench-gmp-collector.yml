@@ -1,9 +1,6 @@
 name: "Run Prombench"
 
 on:
-  push:
-    tags:
-      - 'v*-gmp.*'
   issue_comment:                                 
     types:
       - created
