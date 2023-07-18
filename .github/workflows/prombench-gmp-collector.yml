@@ -171,3 +171,15 @@ jobs:
         uses: docker://saketjajoo/prombench:latest
         with:
             args: make clean;
+
+      - name: 'Post a comment to the PR upon cancelling the benchmark run'
+        if: env.CANCEL_BENCHMARK == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMENT_MSG="Cancelling the benchmark run (for this PR)."
+
+          curl --silent -L -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/${GITHUB_ORG}/${GITHUB_REPO}/issues/${PR_NUMBER}/comments \
+            --data '{ "body": "'"${COMMENT_MSG}"'" }'
