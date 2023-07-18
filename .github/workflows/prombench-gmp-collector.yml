@@ -33,6 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
+      contents: read
+      packages: read
     steps:
 
       - name: 'User Verification'
@@ -150,19 +152,19 @@ jobs:
       
       - name: 'Create the cluster'
         if: env.CREATE_CLUSTER == 'true'
-        uses: docker://saketjajoo/prombench:latest
+        uses: docker://ghcr.io/googlecloudplatform/prometheus-test-infra/prombench:latest
         with:
             args: make cluster_create;
       
       - name: 'Apply the cluster resources (to the main node)'
         if: env.CREATE_CLUSTER == 'true'
-        uses: docker://saketjajoo/prombench:latest
+        uses: docker://ghcr.io/googlecloudplatform/prometheus-test-infra/prombench:latest
         with:
             args: make cluster_resource_apply;
       
       - name: 'Create the nodes'
         if: env.CANCEL_BENCHMARK == 'false'
-        uses: docker://saketjajoo/prombench:latest
+        uses: docker://ghcr.io/googlecloudplatform/prometheus-test-infra/prombench:latest
         with:
             args: >-
               make clean;
@@ -171,13 +173,13 @@ jobs:
       
       - name: 'Apply the node resources (benchmark-related deployments)'
         if: env.CANCEL_BENCHMARK == 'false'
-        uses: docker://saketjajoo/prombench:latest
+        uses: docker://ghcr.io/googlecloudplatform/prometheus-test-infra/prombench:latest
         with:
             args: make resource_apply;
       
       - name: 'Delete the nodes'
         if: env.CANCEL_BENCHMARK == 'true'
-        uses: docker://saketjajoo/prombench:latest
+        uses: docker://ghcr.io/googlecloudplatform/prometheus-test-infra/prombench:latest
         with:
             args: make clean;
 
