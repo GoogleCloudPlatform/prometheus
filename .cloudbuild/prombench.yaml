@@ -1,0 +1,335 @@
+# https://cloud.google.com/build/docs/build-config-file-schema#options
+options:
+  env:
+  - 'CANCEL_BENCHMARK=false'
+  - 'CLUSTER_NAME=prombench'
+  - 'CREATE_CLUSTER=true'
+  - 'DASHBOARD_ID=$_DASHBOARD_ID'
+  - 'DOMAIN_NAME='
+  - 'GITHUB_STATUS_TARGET_URL='
+  - 'GKE_PROJECT_ID=$_GKE_PROJECT_ID'
+  - 'GRAFANA_ADMIN_PASSWORD=admin'
+  - 'LAST_COMMIT_SHA='
+  - 'OAUTH_TOKEN='
+  - 'PROMBENCH_IMAGE=$_PROMBENCH_IMAGE'
+  - 'PROMETHEUS_IMAGE_REPOSITORY=gke.gcr.io/prometheus-engine/prometheus'
+  - 'PROVIDER=gke'
+  - 'SERVICEACCOUNT_CLIENT_EMAIL=$_SERVICEACCOUNT_CLIENT_EMAIL'
+  - 'WH_SECRET='
+  - 'ZONE=us-east4-a'
+  substitutionOption: ALLOW_LOOSE
+  dynamicSubstitutions: true
+
+# https://cloud.google.com/build/docs/configuring-builds/substitute-variable-values
+substitutions:
+  _COMMENTER: $(body.comment.user.login)
+  _COMMENTER_ROLE: $(body.comment.author_association) # OWNER / MEMBER / etc. (https://docs.github.com/en/graphql/reference/enums#commentauthorassociation)
+  _GIT_REPO: $(body.repository.full_name) # GoogleCloudPlatform/prometheus
+  _PR_COMMENT_ACTION: $(body.action)
+  _PR_COMMENT_TEXT: $(body.comment.body)
+  _PR_NUMBER: $(body.issue.number)
+
+# https://cloud.google.com/build/docs/build-config-file-schema#availablesecrets
+availableSecrets:
+  secretManager:
+  - versionName: projects/${PROJECT_NUMBER}/secrets/prombench_service_account_adc_json/versions/1
+    env: 'ADC'
+  - versionName: projects/${PROJECT_NUMBER}/secrets/bot-github-personal-access-token/versions/1
+    env: 'GH_PAT'
+
+
+
+steps:
+  - id: "Verifying GitHub comment and user permissions"
+    name: bash
+    env:
+    - '_COMMENTER=$_COMMENTER'
+    - '_COMMENTER_ROLE=$_COMMENTER_ROLE'
+    - '_GIT_REPO=$_GIT_REPO'
+    - '_PR_COMMENT_ACTION=$_PR_COMMENT_ACTION'
+    - '_PR_COMMENT_TEXT=$_PR_COMMENT_TEXT'
+    - '_PR_NUMBER=$_PR_NUMBER'
+    secretEnv: ['GH_PAT']
+    script: |
+      #!/usr/bin/env bash
+
+      # This function posts comments to GitHub PRs
+      function post_to_github() {
+        URL="$1"
+        BODY="$2"
+
+        curl --silent -L -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer $${GH_PAT}" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "$${URL}" \
+          -d '{"body": "'"$${BODY}"'"}'
+      }
+
+      # Checking the action on the PR (benchmark should trigger only when a new comment is created)
+      # Available actions are: created, deleted and edited -- https://docs.github.com/en/webhooks-and-events/webhooks/webhook-events-and-payloads
+      if ! [ "${_PR_COMMENT_ACTION}" == "created" ]
+      then
+        echo "The PR comment must be created (not edited or deleted) to trigger the benchmark."
+        exit 1
+      fi
+
+      # Ignore comments from gmp-bot (as it will lead to recursive webhook triggers when gmp-bot comments again on the PR)
+      if ([ "${_COMMENTER}" == "gmp-bot" ])
+      then
+        echo "The comment is made by the gmp-bot. Hence, it can be ignored."
+        exit 1
+      fi
+
+      # Checking the PR comment's text
+      if ! [[ "${_PR_COMMENT_TEXT}" == \/prombench* ]]
+      then
+        echo "The PR's comment (${_PR_COMMENT_TEXT}) does not start with '/prombench'"
+        exit 1
+      fi
+
+      # User Verification (https://docs.github.com/en/graphql/reference/enums#commentauthorassociation)
+      if ! ([ "${_COMMENTER_ROLE}" == "OWNER" ] || [ "${_COMMENTER_ROLE}" == "MEMBER" ] || [ "${_COMMENTER_ROLE}" == "COLLABORATOR" ])
+      then
+
+        GITHUB_ORG=$(echo "${_GIT_REPO}" | cut -d'/' -f1)
+        GITHUB_REPO=$(echo "${_GIT_REPO}" | cut -d'/' -f2)
+        export GITHUB_ORG="$${GITHUB_ORG}" && export GITHUB_REPO="$${GITHUB_REPO}"
+
+        COMMENT_MSG="${_COMMENTER} does not have admin or write privileges. Therefore cannot execute the benchmark command."
+        GITHUB_URL="https://api.github.com/repos/$${GITHUB_ORG}/$${GITHUB_REPO}/issues/${_PR_NUMBER}/comments"
+        echo "$${COMMENT_MSG}"
+        post_to_github "$${GITHUB_URL}" "$${COMMENT_MSG}"
+        exit 1
+      fi
+
+  - id: "Setting environment variables"
+    name: gcr.io/cloud-builders/gcloud
+    env:
+    - '_PR_COMMENT_TEXT=$_PR_COMMENT_TEXT'
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        COLLECTOR_TAG_OR_CANCEL=$(echo "${_PR_COMMENT_TEXT}" | head -n 1 | awk '{ print $2 }')
+        if [ "$${COLLECTOR_TAG_OR_CANCEL}" == "cancel" ]
+        then
+          
+          echo "Cancelling the benchmark run for PR #${_PR_NUMBER}."
+          echo "true" > /workspace/CANCEL_BENCHMARK
+
+        else
+          
+          echo "GMP Collector Tag: $${COLLECTOR_TAG_OR_CANCEL}"
+
+          if [[ "$${COLLECTOR_TAG_OR_CANCEL}" == '' ]]
+          then
+            echo "Since the collector version is missing, the latest one would be used."
+            DEFAULT_COLLECTOR_TAG=$(gcloud container images list-tags "$${PROMETHEUS_IMAGE_REPOSITORY}" --sort-by=UPDATE_TIME,TAGS | tail -1 | awk '{ print $2 }')
+            echo "$${DEFAULT_COLLECTOR_TAG}" > /workspace/PROMETHEUS_IMAGE_VERSION
+            export PROMETHEUS_IMAGE_VERSION="$${DEFAULT_COLLECTOR_TAG}"
+          else
+            GCLOUD_TAG=$(gcloud container images list-tags --filter="tags:$${COLLECTOR_TAG_OR_CANCEL}" --format=json $${PROMETHEUS_IMAGE_REPOSITORY})
+            if [[ "$${GCLOUD_TAG}" == "[]" ]]
+            then
+              echo "The $${PROMETHEUS_IMAGE_REPOSITORY} image does not have the $${COLLECTOR_TAG_OR_CANCEL} tag. Hence, this run will use the default latest tag."
+              DEFAULT_COLLECTOR_TAG=$(gcloud container images list-tags "$${PROMETHEUS_IMAGE_REPOSITORY}" --sort-by=UPDATE_TIME,TAGS | tail -1 | awk '{ print $2 }')
+              echo "$${DEFAULT_COLLECTOR_TAG}" > /workspace/PROMETHEUS_IMAGE_VERSION
+              export PROMETHEUS_IMAGE_VERSION="$${DEFAULT_COLLECTOR_TAG}"
+            else
+              echo "$${COLLECTOR_TAG_OR_CANCEL}" > /workspace/PROMETHEUS_IMAGE_VERSION
+              export PROMETHEUS_IMAGE_VERSION="$${COLLECTOR_TAG_OR_CANCEL}"
+            fi
+          fi
+          
+          echo "The release/base GMP Collector's tag is set to: $${PROMETHEUS_IMAGE_VERSION}."
+
+        fi
+
+  - id: "Checking cluster's existance"
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        if $(gcloud container clusters describe "$${CLUSTER_NAME}" --project="$${GKE_PROJECT_ID}" --location="$${ZONE}" >/dev/null 2>&1)
+        then
+          CREATE_CLUSTER="false"
+          echo "$${CREATE_CLUSTER}" > /workspace/CREATE_CLUSTER
+          echo "The cluster (name: $${CLUSTER_NAME}) already exists. Therefore, skipping cluster creation."
+        else
+          CREATE_CLUSTER="true"
+          echo "$${CREATE_CLUSTER}" > /workspace/CREATE_CLUSTER
+          echo "The cluster (name: $${CLUSTER_NAME}) does not exist, the cluster will get created before creating the nodes and triggering the benchmark process."
+        fi
+
+  - id: "Setting gcloud credentials for triggering the benchmark"
+    name: gcr.io/cloud-builders/gcloud
+    secretEnv: ['ADC']
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        echo "$${ADC}" > /workspace/adc.json
+
+  - id: "Triggering Benchmark Action"
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    secretEnv: ['GH_PAT']
+    env:
+    - '_GIT_REPO=$_GIT_REPO' # GoogleCloudPlatform/prometheus
+    - '_PR_NUMBER=$_PR_NUMBER'
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        # This function posts comments to GitHub PRs
+        function post_to_github() {
+          URL="$1"
+          BODY="$2"
+
+          curl --silent -L -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $${GH_PAT}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$${URL}" \
+            -d '{"body": "'"$${BODY}"'"}'
+        }
+
+        # Some of the environment variables (e.g. CREATE_CLUSTER) are overwritten in previous steps and the
+        # new values need to be used in this step. "export"ing the variables does not help and hence the new
+        # values are written to a local file and the corresponding file is read in this step.
+        # Reference: https://cloud.google.com/build/docs/configuring-builds/pass-data-between-steps
+        function get_or_set_env_var() {
+          ENV_VAR_NAME="$1"
+          if [ -f "/workspace/$${ENV_VAR_NAME}" ]
+          then
+            export "$${ENV_VAR_NAME}=$(cat /workspace/$${ENV_VAR_NAME})"
+          fi
+        }
+
+        # All the environment variables created or updated in any of the previous steps must be read
+        # from the local file and exported in this step.
+        get_or_set_env_var "CANCEL_BENCHMARK";
+        get_or_set_env_var "CREATE_CLUSTER";
+        get_or_set_env_var "PROMETHEUS_IMAGE_VERSION";
+
+        GITHUB_ORG=$$(echo "${_GIT_REPO}" | cut -d'/' -f1) # GoogleCloudPlatform
+        GITHUB_REPO=$$(echo "${_GIT_REPO}" | cut -d'/' -f2) # prometheus
+        export GITHUB_ORG="$${GITHUB_ORG}" && export GITHUB_REPO="$${GITHUB_REPO}"
+
+        if [[ "$${CANCEL_BENCHMARK}" == "true" ]]
+        then
+          
+          if [[ "$${CREATE_CLUSTER}" == "true" ]]
+          then
+            COMMENT_MSG="There are no benchmark runs executing as the cluster ($${CLUSTER_NAME}) does not exist."
+            GITHUB_URL="https://api.github.com/repos/$${GITHUB_ORG}/$${GITHUB_REPO}/issues/${_PR_NUMBER}/comments"
+            echo "$${COMMENT_MSG}"
+            post_to_github "$${GITHUB_URL}" "$${COMMENT_MSG}"
+
+          else
+            COMMENT_MSG="Cancelling the benchmark run for this PR: #${_PR_NUMBER}."
+            GITHUB_URL="https://api.github.com/repos/$${GITHUB_ORG}/$${GITHUB_REPO}/issues/${_PR_NUMBER}/comments"
+            echo "$${COMMENT_MSG}"
+            post_to_github "$${GITHUB_URL}" "$${COMMENT_MSG}"
+
+            docker run --volume /workspace/adc.json:/home/adc.json \
+              -e GOOGLE_APPLICATION_CREDENTIALS='/home/adc.json' \
+              -e CLUSTER_NAME="$${CLUSTER_NAME}" \
+              -e GKE_PROJECT_ID="$${GKE_PROJECT_ID}" \
+              -e PR_NUMBER="${_PR_NUMBER}" \
+              -e PROVIDER="$${PROVIDER}" \
+              -e ZONE="$${ZONE}" \
+              "$${PROMBENCH_IMAGE}" make clean;
+          fi
+        
+        else
+
+          CURRENT_DATE_TIME=$(date '+%Y-%m-%dT%H:%M:%S.%3NZ')
+          MONITORING_DASHBOARD_URL="https://console.cloud.google.com/monitoring/dashboards/builder/$${DASHBOARD_ID};startTime=$${CURRENT_DATE_TIME}?f.mlabel.prometheus.prometheus=&f.rlabel.namespace_name.namespace_name=prombench-${_PR_NUMBER}&f.rlabel.namespace.namespace=prombench-${_PR_NUMBER}&f.rlabel.cluster_name.cluster_name=$${CLUSTER_NAME}&f.rlabel.cluster.cluster=$${CLUSTER_NAME}&f.umlabel.goog-k8s-cluster-name.googk8sclustername=$${CLUSTER_NAME}"
+
+
+          COMMENT_MSG="This benchmark run compares this PR (https://github.com/$${GITHUB_ORG}/$${GITHUB_REPO}/pull/${_PR_NUMBER}) with version \`$${PROMETHEUS_IMAGE_VERSION}\` of the [GMP Collector](https://cloud.google.com/stackdriver/docs/managed-prometheus/setup-managed).\n\nAfter a successful deployment, the benchmarking results can be viewed on the [Cloud Monitoring Dashboard]($${MONITORING_DASHBOARD_URL}).\n\nTo cancel or stop the benchmark run, comment \`/prombench cancel\` on this PR."
+          GITHUB_URL="https://api.github.com/repos/$${GITHUB_ORG}/$${GITHUB_REPO}/issues/${_PR_NUMBER}/comments"
+          echo "$${COMMENT_MSG}"
+          post_to_github "$${GITHUB_URL}" "$${COMMENT_MSG}"
+
+          if [[ "$${CREATE_CLUSTER}" == "true" ]]
+          then
+            echo "Creating cluster: $${CLUSTER_NAME}."
+
+            docker run --volume /workspace/adc.json:/home/adc.json \
+              -e GOOGLE_APPLICATION_CREDENTIALS='/home/adc.json' \
+              -e CLUSTER_NAME="$${CLUSTER_NAME}" \
+              -e GKE_PROJECT_ID="$${GKE_PROJECT_ID}" \
+              -e PR_NUMBER="${_PR_NUMBER}" \
+              -e PROVIDER="$${PROVIDER}" \
+              -e ZONE="$${ZONE}" \
+              "$${PROMBENCH_IMAGE}" make cluster_create;
+
+            
+            echo "Applying the cluster resources (on the main node)."
+            
+            docker run --volume /workspace/adc.json:/home/adc.json \
+              -e GOOGLE_APPLICATION_CREDENTIALS='/home/adc.json' \
+              -e CLUSTER_NAME="$${CLUSTER_NAME}" \
+              -e DOMAIN_NAME="$${DOMAIN_NAME}" \
+              -e GITHUB_ORG="$${GITHUB_ORG}" \
+              -e GITHUB_REPO="$${GITHUB_REPO}" \
+              -e GKE_PROJECT_ID="$${GKE_PROJECT_ID}" \
+              -e GRAFANA_ADMIN_PASSWORD="$${GRAFANA_ADMIN_PASSWORD}" \
+              -e OAUTH_TOKEN="$${OAUTH_TOKEN}" \
+              -e PR_NUMBER="${_PR_NUMBER}" \
+              -e PROMETHEUS_IMAGE_REPOSITORY="$${PROMETHEUS_IMAGE_REPOSITORY}" \
+              -e PROMETHEUS_IMAGE_VERSION="$${PROMETHEUS_IMAGE_VERSION}" \
+              -e PROVIDER="$${PROVIDER}" \
+              -e RELEASE="$${PROMETHEUS_IMAGE_VERSION}" \
+              -e SERVICEACCOUNT_CLIENT_EMAIL="$${SERVICEACCOUNT_CLIENT_EMAIL}" \
+              -e WH_SECRET="$${WH_SECRET}" \
+              -e ZONE="$${ZONE}" \
+              "$${PROMBENCH_IMAGE}" make cluster_resource_apply;
+          fi
+
+          echo "Creating nodepools for prometheus nodes."
+
+          docker run --volume /workspace/adc.json:/home/adc.json \
+              -e GOOGLE_APPLICATION_CREDENTIALS='/home/adc.json' \
+              -e CLUSTER_NAME="$${CLUSTER_NAME}" \
+              -e DOMAIN_NAME="$${DOMAIN_NAME}" \
+              -e GITHUB_ORG="$${GITHUB_ORG}" \
+              -e GITHUB_REPO="$${GITHUB_REPO}" \
+              -e GKE_PROJECT_ID="$${GKE_PROJECT_ID}" \
+              -e GRAFANA_ADMIN_PASSWORD="$${GRAFANA_ADMIN_PASSWORD}" \
+              -e OAUTH_TOKEN="$${OAUTH_TOKEN}" \
+              -e PR_NUMBER="${_PR_NUMBER}" \
+              -e PROMETHEUS_IMAGE_REPOSITORY="$${PROMETHEUS_IMAGE_REPOSITORY}" \
+              -e PROMETHEUS_IMAGE_VERSION="$${PROMETHEUS_IMAGE_VERSION}" \
+              -e PROVIDER="$${PROVIDER}" \
+              -e RELEASE="$${PROMETHEUS_IMAGE_VERSION}" \
+              -e SERVICEACCOUNT_CLIENT_EMAIL="$${SERVICEACCOUNT_CLIENT_EMAIL}" \
+              -e WH_SECRET="$${WH_SECRET}" \
+              -e ZONE="$${ZONE}" \
+              "$${PROMBENCH_IMAGE}" "make clean; until make all_nodes_deleted; do echo "Waiting for nodepools to be deleted"; sleep 10; done; make node_create;"
+
+          
+          echo "Applying resources on prometheus nodes."
+          
+          docker run --volume /workspace/adc.json:/home/adc.json \
+              -e GOOGLE_APPLICATION_CREDENTIALS='/home/adc.json' \
+              -e CLUSTER_NAME="$${CLUSTER_NAME}" \
+              -e DOMAIN_NAME="$${DOMAIN_NAME}" \
+              -e GITHUB_ORG="$${GITHUB_ORG}" \
+              -e GITHUB_REPO="$${GITHUB_REPO}" \
+              -e GKE_PROJECT_ID="$${GKE_PROJECT_ID}" \
+              -e GRAFANA_ADMIN_PASSWORD="$${GRAFANA_ADMIN_PASSWORD}" \
+              -e OAUTH_TOKEN="$${OAUTH_TOKEN}" \
+              -e PR_NUMBER="${_PR_NUMBER}" \
+              -e PROMETHEUS_IMAGE_REPOSITORY="$${PROMETHEUS_IMAGE_REPOSITORY}" \
+              -e PROMETHEUS_IMAGE_VERSION="$${PROMETHEUS_IMAGE_VERSION}" \
+              -e PROVIDER="$${PROVIDER}" \
+              -e RELEASE="$${PROMETHEUS_IMAGE_VERSION}" \
+              -e SERVICEACCOUNT_CLIENT_EMAIL="$${SERVICEACCOUNT_CLIENT_EMAIL}" \
+              -e WH_SECRET="$${WH_SECRET}" \
+              -e ZONE="$${ZONE}" \
+              "$${PROMBENCH_IMAGE}" make resource_apply;
+        fi
