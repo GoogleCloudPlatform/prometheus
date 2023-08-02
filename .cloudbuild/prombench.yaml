@@ -20,7 +20,7 @@ steps:
       GITHUB_ORG=$(echo "${_GIT_REPO}" | cut -d'/' -f1) # GoogleCloudPlatform
       GITHUB_REPO=$(echo "${_GIT_REPO}" | cut -d'/' -f2) # prometheus
 
-      echo "GOOGLE_APPLICATION_CREDENTIALS=/home/adc.json" >> /workspace/PROMBENCH_ENV_FILE
+      echo "AUTH_FILE=/home/adc.json" >> /workspace/PROMBENCH_ENV_FILE
       echo "CLUSTER_NAME=${CLUSTER_NAME}" >> /workspace/PROMBENCH_ENV_FILE
       echo "DOMAIN_NAME=${DOMAIN_NAME}" >> /workspace/PROMBENCH_ENV_FILE
       echo "GITHUB_ORG=${GITHUB_ORG}" >> /workspace/PROMBENCH_ENV_FILE
