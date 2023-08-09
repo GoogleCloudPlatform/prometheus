@@ -181,8 +181,8 @@ github.com/prometheus/prometheus/util/logging
 github.com/prometheus/prometheus/util/osutil
 github.com/prometheus/prometheus/util/pool
 github.com/prometheus/prometheus/util/testutil
-# github.com/stretchr/testify v1.8.1
-## explicit; go 1.13
+# github.com/stretchr/testify v1.8.4
+## explicit; go 1.20
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
 # go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.34.0
