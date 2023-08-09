@@ -30,7 +30,7 @@ import (
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/storage"
-	"github.com/prometheus/prometheus/tsdb/wal"
+	"github.com/prometheus/prometheus/tsdb/wlog"
 )
 
 var (
@@ -60,8 +60,8 @@ type WriteStorage struct {
 	reg    prometheus.Registerer
 	mtx    sync.Mutex
 
-	watcherMetrics    *wal.WatcherMetrics
-	liveReaderMetrics *wal.LiveReaderMetrics
+	watcherMetrics    *wlog.WatcherMetrics
+	liveReaderMetrics *wlog.LiveReaderMetrics
 	externalLabels    labels.Labels
 	dir               string
 	queues            map[string]*QueueManager
@@ -82,8 +82,8 @@ func NewWriteStorage(logger log.Logger, reg prometheus.Registerer, dir string, f
 	}
 	rws := &WriteStorage{
 		queues:            make(map[string]*QueueManager),
-		watcherMetrics:    wal.NewWatcherMetrics(reg),
-		liveReaderMetrics: wal.NewLiveReaderMetrics(reg),
+		watcherMetrics:    wlog.NewWatcherMetrics(reg),
+		liveReaderMetrics: wlog.NewLiveReaderMetrics(reg),
 		logger:            logger,
 		reg:               reg,
 		flushDeadline:     flushDeadline,
@@ -158,6 +158,7 @@ func (rws *WriteStorage) ApplyConfig(conf *config.Config) error {
 			Timeout:          rwConf.RemoteTimeout,
 			HTTPClientConfig: rwConf.HTTPClientConfig,
 			SigV4Config:      rwConf.SigV4Config,
+			AzureADConfig:    rwConf.AzureADConfig,
 			Headers:          rwConf.Headers,
 			RetryOnRateLimit: rwConf.QueueConfig.RetryOnRateLimit,
 		})
@@ -278,7 +279,7 @@ func (t *timestampTracker) AppendExemplar(_ storage.SeriesRef, _ labels.Labels, 
 	return 0, nil
 }
 
-func (t *timestampTracker) AppendHistogram(_ storage.SeriesRef, _ labels.Labels, ts int64, h *histogram.Histogram) (storage.SeriesRef, error) {
+func (t *timestampTracker) AppendHistogram(_ storage.SeriesRef, _ labels.Labels, ts int64, _ *histogram.Histogram, _ *histogram.FloatHistogram) (storage.SeriesRef, error) {
 	t.histograms++
 	if ts > t.highestTimestamp {
 		t.highestTimestamp = ts

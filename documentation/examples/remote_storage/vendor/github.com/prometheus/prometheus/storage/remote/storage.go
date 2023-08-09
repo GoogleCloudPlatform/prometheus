@@ -76,6 +76,13 @@ func NewStorage(l log.Logger, reg prometheus.Registerer, stCallback startTimeCal
 	return s
 }
 
+func (s *Storage) Notify() {
+	for _, q := range s.rws.queues {
+		// These should all be non blocking
+		q.watcher.Notify()
+	}
+}
+
 // ApplyConfig updates the state as the new config requires.
 func (s *Storage) ApplyConfig(conf *config.Config) error {
 	s.mtx.Lock()
@@ -120,7 +127,7 @@ func (s *Storage) ApplyConfig(conf *config.Config) error {
 
 		externalLabels := conf.GlobalConfig.ExternalLabels
 		if !rrConf.FilterExternalLabels {
-			externalLabels = make(labels.Labels, 0)
+			externalLabels = labels.EmptyLabels()
 		}
 		queryables = append(queryables, NewSampleAndChunkQueryableClient(
 			c,
