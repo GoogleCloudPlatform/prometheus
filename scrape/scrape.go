@@ -91,6 +91,7 @@ type scrapePool struct {
 
 	scrapeFailureLogger    log.Logger
 	scrapeFailureLoggerMtx sync.RWMutex
+	opts                   *Options
 }
 
 type labelLimits struct {
@@ -147,6 +148,7 @@ func newScrapePool(cfg *config.ScrapeConfig, app storage.Appendable, offsetSeed 
 		logger:               logger,
 		metrics:              metrics,
 		httpOpts:             options.HTTPClientOptions,
+		opts:                 options,
 	}
 	sp.newLoop = func(opts scrapeLoopOptions) loop {
 		// Update the targets retrieval function for metadata to a new scrape cache.
@@ -188,6 +190,7 @@ func newScrapePool(cfg *config.ScrapeConfig, app storage.Appendable, offsetSeed 
 			metrics,
 			options.skipOffsetting,
 			opts.validationScheme,
+			options,
 		)
 	}
 	sp.metrics.targetScrapePoolTargetLimit.WithLabelValues(sp.config.JobName).Set(float64(sp.config.TargetLimit))
@@ -284,7 +287,7 @@ func (sp *scrapePool) reload(cfg *config.ScrapeConfig) error {
 	sp.metrics.targetScrapePoolReloads.Inc()
 	start := time.Now()
 
-	client, err := config_util.NewClientFromConfig(cfg.HTTPClientConfig, cfg.JobName, sp.httpOpts...)
+	client, err := config_util.NewClientFromConfig(cfg.HTTPClientConfig, cfg.JobName, sp.opts.HTTPClientOptions...)
 	if err != nil {
 		sp.metrics.targetScrapePoolReloadsFailed.Inc()
 		return fmt.Errorf("error creating HTTP client: %w", err)
@@ -845,12 +848,16 @@ func (s *targetScraper) readResponse(ctx context.Context, resp *http.Response, w
 	return resp.Header.Get("Content-Type"), nil
 }
 
-// A loop can run and be stopped again. It must not be reused after it was stopped.
+// A loop can run and be stopped. The same loop instance must not be reused
+// after it was stopped.
+// stop and stopAfterScrapeAttempt can be invoked multiple times, but after first
+// stop, other invocations do nothing.
 type loop interface {
 	run(errc chan<- error)
 	setForcedError(err error)
 	setScrapeFailureLogger(log.Logger)
 	stop()
+	stopAfterScrapeAttempt(minScrapeTime time.Time)
 	getCache() *scrapeCache
 	disableEndOfRunStalenessMarkers()
 }
@@ -901,6 +908,7 @@ type scrapeLoop struct {
 	stopped     chan struct{}
 
 	disabledEndOfRunStalenessMarkers bool
+	stopAfterScrapeAttemptCh         chan time.Time
 
 	reportExtraMetrics  bool
 	appendMetadataToWAL bool
@@ -908,6 +916,7 @@ type scrapeLoop struct {
 	metrics *scrapeMetrics
 
 	skipOffsetting bool // For testability.
+	opts           *Options
 }
 
 // scrapeCache tracks mappings of exposed metric strings to label sets and
@@ -1144,7 +1153,7 @@ func (c *scrapeCache) ListMetadata() []MetricMetadata {
 	return res
 }
 
-// MetadataSize returns the size of the metadata cache.
+// SizeMetadata returns the size of the metadata cache.
 func (c *scrapeCache) SizeMetadata() (s int) {
 	c.metaMtx.Lock()
 	defer c.metaMtx.Unlock()
@@ -1155,7 +1164,7 @@ func (c *scrapeCache) SizeMetadata() (s int) {
 	return s
 }
 
-// MetadataLen returns the number of metadata entries in the cache.
+// LengthMetadata returns the number of metadata entries in the cache.
 func (c *scrapeCache) LengthMetadata() int {
 	c.metaMtx.Lock()
 	defer c.metaMtx.Unlock()
@@ -1163,7 +1172,8 @@ func (c *scrapeCache) LengthMetadata() int {
 	return len(c.metadata)
 }
 
-func newScrapeLoop(ctx context.Context,
+func newScrapeLoop(
+	ctx context.Context,
 	sc scraper,
 	l log.Logger,
 	buffers *pool.Pool,
@@ -1192,6 +1202,7 @@ func newScrapeLoop(ctx context.Context,
 	metrics *scrapeMetrics,
 	skipOffsetting bool,
 	validationScheme model.ValidationScheme,
+	opts *Options,
 ) *scrapeLoop {
 	if l == nil {
 		l = log.NewNopLogger()
@@ -1202,10 +1213,13 @@ func newScrapeLoop(ctx context.Context,
 	if cache == nil {
 		cache = newScrapeCache(metrics)
 	}
+	if opts == nil {
+		opts = &Options{}
+	}
 
 	appenderCtx := ctx
 
-	if passMetadataInContext {
+	if opts.PassMetadataInContext {
 		// Store the cache and target in the context. This is then used by downstream OTel Collector
 		// to lookup the metadata required to process the samples. Not used by Prometheus itself.
 		// TODO(gouthamve) We're using a dedicated context because using the parentCtx caused a memory
@@ -1244,6 +1258,8 @@ func newScrapeLoop(ctx context.Context,
 		metrics:                        metrics,
 		skipOffsetting:                 skipOffsetting,
 		validationScheme:               validationScheme,
+		opts:                           opts,
+		stopAfterScrapeAttemptCh:       make(chan time.Time, 1),
 	}
 	sl.ctx, sl.cancel = context.WithCancel(ctx)
 
@@ -1260,33 +1276,35 @@ func (sl *scrapeLoop) setScrapeFailureLogger(l log.Logger) {
 }
 
 func (sl *scrapeLoop) run(errc chan<- error) {
-	if !sl.skipOffsetting {
-		select {
-		case <-time.After(sl.scraper.offset(sl.interval, sl.offsetSeed)):
-			// Continue after a scraping offset.
-		case <-sl.ctx.Done():
-			close(sl.stopped)
-			return
-		}
+	defer close(sl.stopAfterScrapeAttemptCh)
+
+	jitterDelayTime := sl.scraper.offset(sl.interval, sl.offsetSeed)
+	if sl.skipOffsetting {
+		jitterDelayTime = 0 * time.Second
+	} else if sl.opts.InitialScrapeOffset != nil {
+		jitterDelayTime = *sl.opts.InitialScrapeOffset
+	}
+
+	select {
+	case <-sl.parentCtx.Done():
+		close(sl.stopped)
+		return
+	case <-sl.ctx.Done():
+		close(sl.stopped)
+		return
+	case <-sl.stopAfterScrapeAttemptCh:
+		sl.cancel()
+	case <-time.After(jitterDelayTime):
+		// Continue after a scraping offset.
 	}
 
 	var last time.Time
-
 	alignedScrapeTime := time.Now().Round(0)
 	ticker := time.NewTicker(sl.interval)
 	defer ticker.Stop()
 
 mainLoop:
 	for {
-		select {
-		case <-sl.parentCtx.Done():
-			close(sl.stopped)
-			return
-		case <-sl.ctx.Done():
-			break mainLoop
-		default:
-		}
-
 		// Temporary workaround for a jitter in go timers that causes disk space
 		// increase in TSDB.
 		// See https://github.com/prometheus/prometheus/issues/7846
@@ -1315,6 +1333,11 @@ mainLoop:
 			return
 		case <-sl.ctx.Done():
 			break mainLoop
+		case minScrapeTime := <-sl.stopAfterScrapeAttemptCh:
+			sl.cancel()
+			if minScrapeTime.Before(last) {
+				break mainLoop
+			}
 		case <-ticker.C:
 		}
 	}
@@ -1513,11 +1536,39 @@ func (sl *scrapeLoop) endOfRunStaleness(last time.Time, ticker *time.Ticker, int
 	}
 }
 
-// Stop the scraping. May still write data and stale markers after it has
-// returned. Cancel the context to stop all writes.
+// stop stops the scraping. The loop may still write data and stale markers after
+// stop has returned. Cancel the context (e.g. via Manager.Stop()) to stop all
+// writes or if stop takes too much time.
 func (sl *scrapeLoop) stop() {
+	if sl.cancel == nil {
+		return
+	}
+
 	sl.cancel()
 	<-sl.stopped
+	sl.cancel = nil
+}
+
+// stopAfterScrapeAttempt stops scraping after ensuring the last scrape attempt
+// happened after minScrapeTime. minScrapeTime can't be larger than time.Now.
+//
+// Similar to stop, the loop may still write data and stale markers after
+// stopAfterScrapeAttempt has returned. Cancel the context (e.g. via
+// Manager.Stop()) to stop all writes or if stopAfterScrapeAttempt takes too much
+// time.
+func (sl *scrapeLoop) stopAfterScrapeAttempt(minScrapeTime time.Time) {
+	if sl.cancel == nil {
+		return
+	}
+
+	now := time.Now()
+	if minScrapeTime.After(now) {
+		minScrapeTime = now
+	}
+
+	sl.stopAfterScrapeAttemptCh <- minScrapeTime
+	<-sl.stopped
+	sl.cancel = nil
 }
 
 func (sl *scrapeLoop) disableEndOfRunStalenessMarkers() {
@@ -1563,10 +1614,6 @@ func (sl *scrapeLoop) append(app storage.Appender, b []byte, contentType string,
 	// labelset is for a new series or the metadata for this series has just
 	// changed. It returns a boolean based on whether the metadata was updated.
 	updateMetadata := func(lset labels.Labels, isNewSeries bool) bool {
-		if !sl.appendMetadataToWAL {
-			return false
-		}
-
 		sl.cache.metaMtx.Lock()
 		defer sl.cache.metaMtx.Unlock()
 		metaEntry, metaOk := sl.cache.metadata[lset.Get(labels.MetricName)]
@@ -1798,7 +1845,7 @@ loop:
 			sl.metrics.targetScrapeExemplarOutOfOrder.Add(float64(outOfOrderExemplars))
 		}
 
-		if sl.appendMetadataToWAL && metadataChanged {
+		if metadataChanged {
 			if _, merr := app.UpdateMetadata(ref, lset, meta); merr != nil {
 				// No need to fail the scrape on errors appending metadata.
 				level.Debug(sl.l).Log("msg", "Error when appending metadata in scrape loop", "ref", fmt.Sprintf("%d", ref), "metadata", fmt.Sprintf("%+v", meta), "err", merr)
