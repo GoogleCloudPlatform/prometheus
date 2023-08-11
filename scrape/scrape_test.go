@@ -185,6 +185,10 @@ func (l *testLoop) stop() {
 	l.stopFunc()
 }
 
+func (l *testLoop) stopAfterScrapeAttempt(_ time.Time) {
+	l.stopFunc()
+}
+
 func (l *testLoop) getCache() *scrapeCache {
 	return nil
 }
@@ -282,6 +286,7 @@ func TestScrapePoolReload(t *testing.T) {
 		client:        http.DefaultClient,
 		metrics:       newTestScrapeMetrics(t),
 		symbolTable:   labels.NewSymbolTable(),
+		opts:          &Options{},
 	}
 
 	// Reloading a scrape pool with a new scrape configuration must stop all scrape
@@ -365,6 +370,7 @@ func TestScrapePoolReloadPreserveRelabeledIntervalTimeout(t *testing.T) {
 		client:      http.DefaultClient,
 		metrics:     newTestScrapeMetrics(t),
 		symbolTable: labels.NewSymbolTable(),
+		opts:        &Options{},
 	}
 
 	err := sp.reload(reloadCfg)
@@ -396,6 +402,7 @@ func TestScrapePoolTargetLimit(t *testing.T) {
 		client:        http.DefaultClient,
 		metrics:       newTestScrapeMetrics(t),
 		symbolTable:   labels.NewSymbolTable(),
+		opts:          &Options{},
 	}
 
 	tgs := []*targetgroup.Group{}
@@ -629,6 +636,7 @@ func TestScrapePoolScrapeLoopsStarted(t *testing.T) {
 		client:        http.DefaultClient,
 		metrics:       newTestScrapeMetrics(t),
 		symbolTable:   labels.NewSymbolTable(),
+		opts:          &Options{},
 	}
 
 	tgs := []*targetgroup.Group{
@@ -684,6 +692,7 @@ func newBasicScrapeLoop(t testing.TB, ctx context.Context, scraper scraper, app 
 		false,
 		newTestScrapeMetrics(t),
 		false,
+		nil,
 	)
 }
 
@@ -826,6 +835,7 @@ func TestScrapeLoopRun(t *testing.T) {
 		false,
 		scrapeMetrics,
 		false,
+		nil,
 	)
 
 	// The loop must terminate during the initial offset if the context
@@ -970,6 +980,7 @@ func TestScrapeLoopMetadata(t *testing.T) {
 		false,
 		scrapeMetrics,
 		false,
+		nil,
 	)
 	defer cancel()
 
@@ -3735,8 +3746,7 @@ scrape_configs:
 	mng.ApplyConfig(cfg)
 	tsets := make(chan map[string][]*targetgroup.Group)
 	go func() {
-		err = mng.Run(tsets)
-		require.NoError(t, err)
+		mng.Run(tsets)
 	}()
 	defer mng.Stop()
 
