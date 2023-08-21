@@ -1,7 +1,7 @@
 ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs
-ARG IMAGE_BUILD_GO=golang:1.20-bookworm
-ARG IMAGE_BASE_DEBUG=gcr.io/distroless/static-debian12:debug
-ARG IMAGE_BASE=gcr.io/distroless/static-debian12
+ARG IMAGE_BUILD_GO=golang:1.20-bullseye
+ARG IMAGE_BASE_DEBUG=gcr.io/distroless/static-debian11:debug
+ARG IMAGE_BASE=gcr.io/distroless/static-debian11
 
 FROM ${IMAGE_BUILD_GO} AS gobase
 
