@@ -1239,8 +1239,8 @@ func (sl *scrapeLoop) run(errc chan<- error) {
 	defer close(sl.stopAfterScrapeAttemptCh)
 
 	jitterDelayTime := sl.scraper.offset(sl.interval, sl.offsetSeed)
-	if sl.opts.IgnoreJitter {
-		jitterDelayTime = 0 * time.Second
+	if sl.opts.InitialScrapeOffset != nil {
+		jitterDelayTime = *sl.opts.InitialScrapeOffset
 	}
 
 	select {
