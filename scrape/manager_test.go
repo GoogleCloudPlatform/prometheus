@@ -15,7 +15,6 @@ package scrape
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -873,46 +872,88 @@ func TestUnregisterMetrics(t *testing.T) {
 }
 
 func TestManagerStopAfterScrapeAttempt(t *testing.T) {
+	noOffset := 0 * time.Nanosecond
+	largeOffset := 99 * time.Hour
+	oneSecondOffset := 1 * time.Second
+	tenSecondOffset := 10 * time.Second
 	for _, tcase := range []struct {
-		name            string
-		noJitter        bool
-		stop            func(m *Manager)
+		name string
+		// initialScrapeOffset defines how long to wait before scraping all targets.
+		initialScrapeOffset *time.Duration
+		// stopDelay defines how long the scrape loop should run before the the stopFunc is run.
+		stopDelay time.Duration
+		// stopFunc controls how the manager should be stopped.
+		stopFunc        func(m *Manager)
 		expectedSamples int
 	}{
 		{
-			name:            "no scrape stop, no jitter",
-			noJitter:        true,
-			stop:            func(m *Manager) { m.Stop() },
-			expectedSamples: 1,
+			name:                "no scrape on stop, no jitter",
+			initialScrapeOffset: &noOffset,
+			stopDelay:           5 * time.Second,
+			stopFunc:            func(m *Manager) { m.Stop() },
+			expectedSamples:     1,
 		},
 		{
 			name:            "no scrape on stop, with jitter",
-			stop:            func(m *Manager) { m.Stop() },
+			stopDelay:       5 * time.Second,
+			stopFunc:        func(m *Manager) { m.Stop() },
 			expectedSamples: 0,
 		},
 		{
-			name:            "scrape on stop, no jitter",
-			noJitter:        true,
-			stop:            func(m *Manager) { m.StopAfterScrapeAttempt(time.Now()) },
-			expectedSamples: 2,
+			name:                "scrape on stop, no jitter",
+			initialScrapeOffset: &noOffset,
+			stopDelay:           5 * time.Second,
+			stopFunc:            func(m *Manager) { m.StopAfterScrapeAttempt(time.Now()) },
+			expectedSamples:     2,
 		},
 		{
-			name:            "scrape on stop, but initial sample is fresh enough, no jitter",
-			noJitter:        true,
-			stop:            func(m *Manager) { m.StopAfterScrapeAttempt(time.Now().Add(-1 * time.Hour)) },
-			expectedSamples: 1,
+			name:                "scrape on stop, but initial sample is fresh enough, no jitter",
+			initialScrapeOffset: &noOffset,
+			stopDelay:           5 * time.Second,
+			stopFunc:            func(m *Manager) { m.StopAfterScrapeAttempt(time.Now().Add(-1 * time.Hour)) },
+			expectedSamples:     1,
 		},
 		{
 			name:            "scrape on stop, with jitter",
-			stop:            func(m *Manager) { m.StopAfterScrapeAttempt(time.Now()) },
+			stopDelay:       5 * time.Second,
+			stopFunc:        func(m *Manager) { m.StopAfterScrapeAttempt(time.Now()) },
 			expectedSamples: 1,
+		},
+		{
+			name:                "scrape on stop, with large offset",
+			initialScrapeOffset: &largeOffset,
+			stopDelay:           5 * time.Second,
+			stopFunc:            func(m *Manager) { m.StopAfterScrapeAttempt(time.Now()) },
+			expectedSamples:     1,
+		},
+		{
+			name:                "scrape on stop after 5s, with offset of 1s",
+			initialScrapeOffset: &oneSecondOffset,
+			stopDelay:           5 * time.Second,
+			stopFunc:            func(m *Manager) { m.StopAfterScrapeAttempt(time.Now()) },
+			expectedSamples:     2,
+		},
+		{
+			name:                "scrape on stop after 5s, with offset of 10s",
+			initialScrapeOffset: &tenSecondOffset,
+			stopDelay:           5 * time.Second,
+			stopFunc:            func(m *Manager) { m.StopAfterScrapeAttempt(time.Now()) },
+			expectedSamples:     1,
+		},
+		{
+			name:                "no scrape on stop, with offset of 10s",
+			initialScrapeOffset: &tenSecondOffset,
+			stopDelay:           5 * time.Second,
+			stopFunc:            func(m *Manager) { m.Stop() },
+			expectedSamples:     0,
 		},
 	} {
 		t.Run(tcase.name, func(t *testing.T) {
 			app := &collectResultAppender{}
 			// Setup scrape manager.
 			scrapeManager, err := NewManager(&Options{
-				IgnoreJitter: tcase.noJitter,
+				InitialScrapeOffset: tcase.initialScrapeOffset,
+
 				// Extremely high value to turn it off. We don't want to wait minimum 5s, so
 				// we reload manually.
 				// TODO(bwplotka): Make scrape manager more testable.
@@ -952,26 +993,11 @@ func TestManagerStopAfterScrapeAttempt(t *testing.T) {
 				},
 			})
 			scrapeManager.reload()
-			// At this point the first sample is scheduled to be scraped after the initial
-			// jitter in the background scrape loop go-routine
-			//
-			// With jitter the first sample will appear after long time,
-			// given the extremely long scrape interval configured. We stop right
-			// away and expect only the last sample due to stop.
-			//
-			// With no jitter setting, we expect the first to be added straight away--wait
-			// for it, before stopping.
-			if tcase.noJitter {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				require.NoError(t, runutil.Retry(100*time.Millisecond, ctx.Done(), func() error {
-					if countFloatSamples(app, "expected_metric") < 1 {
-						return errors.New("expected more then one expected_metric sample")
-					}
-					return nil
-				}), "after 5 seconds")
-			}
-			tcase.stop(scrapeManager)
+
+			// Wait for the defined stop delay, before stopping.
+			time.Sleep(tcase.stopDelay)
+			tcase.stopFunc(scrapeManager)
+
 			require.Equal(t, tcase.expectedSamples, countFloatSamples(app, "expected_metric"))
 		})
 	}

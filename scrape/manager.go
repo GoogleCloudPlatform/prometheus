@@ -89,12 +89,18 @@ type Options struct {
 	// Optional HTTP client options to use when scraping.
 	HTTPClientOptions []config_util.HTTPClientOption
 
-	// IgnoreJitter causes all targets managed by this manager to be scraped
-	// as soon as they are discovered. By default, all targets have offset,
-	// so we spread the scraping load evenly within Prometheus server.
+	// InitialScrapeOffset controls how long after startup we should scrape all
+	// targets.  By default, all targets have an offset so we spread the
+	// scraping load evenly within the Prometheus server. Configuring this will
+	// make it so all targets have the same configured offset, which may be
+	// undesirable as load is no longer evenly spread.  This is useful however
+	// in serverless deployments where we're sensitive to the intitial offsets
+	// and would like them to be small and configurable.
+	//
 	// NOTE(bwplotka): This option is experimental and not used by Prometheus.
-	// It was created for serverless flavors of OpenTelemetry contrib's prometheusreceiver.
-	IgnoreJitter bool
+	// It was created for serverless flavors of OpenTelemetry contrib's
+	// prometheusreceiver.
+	InitialScrapeOffset *time.Duration
 
 	// private option for testability.
 	skipOffsetting bool
