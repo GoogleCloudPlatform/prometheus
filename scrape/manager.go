@@ -85,6 +85,12 @@ type Options struct {
 	EnableCreatedTimestampZeroIngestion bool
 	// Option to enable the ingestion of native histograms.
 	EnableNativeHistogramsIngestion bool
+	// Option to enable discovering targets immediately on start up as opposed
+	// to waiting for the interval defined in DiscoveryReloadInterval before
+	// initializing the scrape pools. Disabled by default. Useful for serverless
+	// flavors of OpenTelemetry contrib's prometheusreceiver where we're
+	// sensitive to start up delays.
+	DiscoveryReloadOnStartup bool
 
 	// Optional HTTP client options to use when scraping.
 	HTTPClientOptions []config_util.HTTPClientOption
@@ -157,8 +163,17 @@ func (m *Manager) reloader() {
 		reloadIntervalDuration = model.Duration(5 * time.Second)
 	}
 
-	ticker := time.NewTicker(time.Duration(reloadIntervalDuration))
+	// Skip the initial reload interval wait for the first reload.
+	if m.opts.DiscoveryReloadOnStartup {
+		select {
+		case <-m.triggerReload:
+			m.reload()
+		case <-m.graceShut:
+			return
+		}
+	}
 
+	ticker := time.NewTicker(time.Duration(reloadIntervalDuration))
 	defer ticker.Stop()
 
 	for {
