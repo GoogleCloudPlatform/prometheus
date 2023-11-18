@@ -620,6 +620,44 @@ func TestManagerTargetsUpdates(t *testing.T) {
 	}
 }
 
+func TestManagerSkipInitialWait(t *testing.T) {
+	opts := Options{DiscoveryReloadOnStartup: true}
+	m := NewManager(&opts, nil, nil)
+
+	ts := make(chan map[string][]*targetgroup.Group, 1)
+	go m.Run(ts)
+	defer m.Stop()
+
+	tgSent := make(map[string][]*targetgroup.Group)
+	tgSent["test"] = []*targetgroup.Group{
+		{
+			Source: "test_source",
+		},
+	}
+
+	select {
+	case ts <- tgSent:
+	case <-time.After(10 * time.Millisecond):
+		t.Error("Scrape manager's channel remained blocked after the set threshold.")
+	}
+
+	// Give some time for the reloader to have picked this up.
+	time.Sleep(2 * time.Second)
+
+	m.mtxScrape.Lock()
+	tsetActual := m.targetSets
+	m.mtxScrape.Unlock()
+
+	// Make sure all updates have been received.
+	require.Equal(t, tgSent, tsetActual)
+
+	select {
+	case <-m.triggerReload:
+		t.Error("Reload should've already happened")
+	default:
+	}
+}
+
 func TestSetOffsetSeed(t *testing.T) {
 	getConfig := func(prometheus string) *config.Config {
 		cfgText := `

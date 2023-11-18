@@ -130,6 +130,16 @@ func Updatert(u time.Duration) func(*Manager) {
 	}
 }
 
+// SkipInitialWait sets the name of the manager. This is used in serverless flavours of OTel's prometheusreceiver
+// which is sensitive to startup latencies.
+func SkipInitialWait() func(*Manager) {
+	return func(m *Manager) {
+		m.mtx.Lock()
+		defer m.mtx.Unlock()
+		m.skipStartupWait = true
+	}
+}
+
 // HTTPClientOptions sets the list of HTTP client options to expose to
 // Discoverers. It is up to Discoverers to choose to use the options provided.
 func HTTPClientOptions(opts ...config.HTTPClientOption) func(*Manager) {
@@ -160,6 +170,11 @@ type Manager struct {
 	// How long to wait before sending updates to the channel. The variable
 	// should only be modified in unit tests.
 	updatert time.Duration
+
+	// skipStartupWait allows the discovery manager to skip the initial wait before sending updates
+	// to the channel. This is used in serverless flavours of OTel's prometheusreceiver
+	// which is sensitive to startup latencies.
+	skipStartupWait bool
 
 	// The triggerSend channel signals to the Manager that new updates have been received from providers.
 	triggerSend chan struct{}
@@ -212,6 +227,7 @@ func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
 	m.metrics.FailedConfigs.Set(float64(failedCount))
 
 	var (
+		keep         bool
 		wg           sync.WaitGroup
 		newProviders []*Provider
 	)
@@ -232,6 +248,7 @@ func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
 
 		m.targetsMtx.Lock()
 		for s := range prov.subs {
+			keep = true
 			refTargets = m.targets[poolKey{s, prov.name}]
 			// Remove obsolete subs' targets.
 			if _, ok := prov.newSubs[s]; !ok {
@@ -266,7 +283,7 @@ func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
 	// See https://github.com/prometheus/prometheus/pull/8639 for details.
 	// This also helps making the downstream managers drop stale targets as soon as possible.
 	// See https://github.com/prometheus/prometheus/pull/13147 for details.
-	if len(m.providers) > 0 {
+	if keep || len(m.providers) > 0 {
 		select {
 		case m.triggerSend <- struct{}{}:
 		default:
@@ -351,6 +368,33 @@ func (m *Manager) updater(ctx context.Context, p *Provider, updates chan []*targ
 func (m *Manager) sender() {
 	ticker := time.NewTicker(m.updatert)
 	defer ticker.Stop()
+
+	// Send the targets downstream as soon as you see them if skipStartupWait is
+	// set. If discovery receiver's channel is too busy, fall back to the
+	// regular loop.
+	if m.skipStartupWait {
+		select {
+		case <-m.triggerSend:
+			m.metrics.SentUpdates.Inc()
+			select {
+			case m.syncCh <- m.allGroups():
+			case <-ticker.C:
+				m.metrics.DelayedUpdates.Inc()
+				level.Debug(m.logger).Log("msg", "Discovery receiver's channel was full so will retry the next cycle")
+				select {
+				case m.triggerSend <- struct{}{}:
+				default:
+				}
+			case <-m.ctx.Done():
+				return
+			}
+		case <-m.ctx.Done():
+			return
+		}
+
+		// We restart the ticker to ensure that no two updates are less than updatert apart.
+		ticker.Reset(m.updatert)
+	}
 
 	for {
 		select {
