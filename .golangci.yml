@@ -10,8 +10,7 @@ output:
 
 linters:
   enable:
-    - depguard
-    - gocritic
+    # - depguard # NOTE(bwplotka): See https://github.com/GoogleCloudPlatform/prometheus/pull/120  for rationales.
     - gofumpt
     - goimports
     - misspell
@@ -65,7 +64,9 @@ linters-settings:
     local-prefixes: github.com/prometheus/prometheus
   gofumpt:
     extra-rules: true
-  # NOTE(bwplotka): See https://github.com/GoogleCloudPlatform/prometheus/pull/120 for rationales on adding options below.
+  # NOTE(bwplotka): See https://github.com/GoogleCloudPlatform/prometheus/pull/120  for rationales on adding options below.
+  revive:
+    severity: error # We only want critical issues.
   staticcheck:
     # Turn off deprecation notices, for our fork old versions it's fine.
     checks: ["all", "-SA1019"]
