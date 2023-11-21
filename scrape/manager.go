@@ -304,6 +304,7 @@ func (m *Manager) StopAfterScrapeAttempt(minScrapeTime time.Time) {
 
 	var wg sync.WaitGroup
 	for _, p := range m.scrapePools {
+		p.mtx.Lock()
 		for _, l := range p.loops {
 			l := l
 			wg.Add(1)
@@ -312,6 +313,7 @@ func (m *Manager) StopAfterScrapeAttempt(minScrapeTime time.Time) {
 				wg.Done()
 			}()
 		}
+		p.mtx.Unlock()
 	}
 	wg.Wait()
 
