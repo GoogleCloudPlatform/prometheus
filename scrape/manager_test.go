@@ -708,11 +708,14 @@ scrape_configs:
 	require.ElementsMatch(t, []string{"job1", "job3"}, scrapeManager.ScrapePools())
 }
 
+var (
+	noOffset        = 0 * time.Nanosecond
+	largeOffset     = 99 * time.Hour
+	oneSecondOffset = 1 * time.Second
+	tenSecondOffset = 10 * time.Second
+)
+
 func TestManagerStopAfterScrapeAttempt(t *testing.T) {
-	noOffset := 0 * time.Nanosecond
-	largeOffset := 99 * time.Hour
-	oneSecondOffset := 1 * time.Second
-	tenSecondOffset := 10 * time.Second
 	for _, tcase := range []struct {
 		name string
 		// initialScrapeOffset defines how long to wait before scraping all targets.
@@ -778,7 +781,7 @@ func TestManagerStopAfterScrapeAttempt(t *testing.T) {
 			expectedSamples:     1,
 		},
 		{
-			name:                "no scrape on stop, with offset of 10s",
+			name:                "no scrape on stop after 5s, with offset of 10s",
 			initialScrapeOffset: &tenSecondOffset,
 			stopDelay:           5 * time.Second,
 			stopFunc:            func(m *Manager) { m.Stop() },
@@ -790,23 +793,12 @@ func TestManagerStopAfterScrapeAttempt(t *testing.T) {
 
 			// Setup scrape manager.
 			scrapeManager := NewManager(&Options{
-				InitialScrapeOffset: tcase.initialScrapeOffset,
-
-				// Extremely high value to turn it off. We don't want to wait minimum 5s, so
-				// we reload manually.
-				// TODO(bwplotka): Make scrape manager more testable.
-				DiscoveryReloadInterval: model.Duration(99 * time.Hour),
+				InitialScrapeOffset:      tcase.initialScrapeOffset,
+				DiscoveryReloadOnStartup: true,
 			}, log.NewLogfmtLogger(os.Stderr), &collectResultAppendable{app})
 
-			require.NoError(t, scrapeManager.ApplyConfig(&config.Config{
-				GlobalConfig: config.GlobalConfig{
-					// Extremely high scrape interval, to ensure the only chance to see the
-					// sample is on start and stopAfterScrapeAttempt.
-					ScrapeInterval: model.Duration(99 * time.Hour),
-					ScrapeTimeout:  model.Duration(10 * time.Second),
-				},
-				ScrapeConfigs: []*config.ScrapeConfig{{JobName: "test"}},
-			}))
+			ch := make(chan map[string][]*targetgroup.Group, 1)
+			go scrapeManager.Run(ch)
 
 			// Start fake HTTP target to scrape returning a single metric.
 			server := httptest.NewServer(
@@ -820,9 +812,17 @@ func TestManagerStopAfterScrapeAttempt(t *testing.T) {
 			serverURL, err := url.Parse(server.URL)
 			require.NoError(t, err)
 
-			// Add fake target directly into tsets + reload. Normally users would use
-			// Manager.Run and wait for minimum 5s refresh interval.
-			scrapeManager.updateTsets(map[string][]*targetgroup.Group{
+			require.NoError(t, scrapeManager.ApplyConfig(&config.Config{
+				GlobalConfig: config.GlobalConfig{
+					// Extremely high scrape interval, to ensure the only chance to see the
+					// sample is on start and stopAfterScrapeAttempt.
+					ScrapeInterval: model.Duration(99 * time.Hour),
+					ScrapeTimeout:  model.Duration(10 * time.Second),
+				},
+				ScrapeConfigs: []*config.ScrapeConfig{{JobName: "test"}},
+			}))
+
+			ch <- map[string][]*targetgroup.Group{
 				"test": {
 					{
 						Targets: []model.LabelSet{{
@@ -831,8 +831,7 @@ func TestManagerStopAfterScrapeAttempt(t *testing.T) {
 						}},
 					},
 				},
-			})
-			scrapeManager.reload()
+			}
 
 			// Wait for the defined stop delay, before stopping.
 			time.Sleep(tcase.stopDelay)

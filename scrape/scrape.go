@@ -233,6 +233,7 @@ type scrapePool struct {
 	cancel     context.CancelFunc
 
 	// mtx must not be taken after targetMtx.
+	// mtx guards updates to scrape pool (e.g. loops and activeTarget maps).
 	mtx    sync.Mutex
 	config *config.ScrapeConfig
 	client *http.Client

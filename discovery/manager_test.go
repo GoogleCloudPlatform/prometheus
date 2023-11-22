@@ -775,6 +775,31 @@ func pk(provider, setName string, n int) poolKey {
 	}
 }
 
+func TestTargetSetTargetGroupsPresentOnStartup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	discoveryManager := NewManager(ctx, log.NewNopLogger())
+
+	// Set the updatert to a super long time, so we can verify that the skip worked correctly.
+	discoveryManager.updatert = 100 * time.Hour
+	go discoveryManager.Run()
+
+	c := map[string]Configs{
+		"prometheus": {
+			staticConfig("foo:9090"),
+		},
+	}
+	discoveryManager.ApplyConfig(c)
+
+	syncedTargets := <-discoveryManager.SyncCh()
+	require.Equal(t, 1, len(syncedTargets))
+	verifySyncedPresence(t, syncedTargets, "prometheus", "{__address__=\"foo:9090\"}", true)
+	require.Equal(t, 1, len(syncedTargets["prometheus"]))
+	p := pk("static", "prometheus", 0)
+	verifyPresence(t, discoveryManager.targets, p, "{__address__=\"foo:9090\"}", true)
+	require.Equal(t, 1, len(discoveryManager.targets))
+}
+
 func TestTargetSetTargetGroupsPresentOnConfigReload(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -341,29 +341,43 @@ func (m *Manager) updater(ctx context.Context, p *Provider, updates chan []*targ
 }
 
 func (m *Manager) sender() {
+	updateWhenTriggered := func() {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.triggerSend:
+			for {
+				sentUpdates.WithLabelValues(m.name).Inc()
+				select {
+				case <-m.ctx.Done():
+					return
+				case <-m.triggerSend:
+					// We waited for someone to receive, but we got new update in the meantime, so retry until success.
+					delayedUpdates.WithLabelValues(m.name).Inc()
+					level.Debug(m.logger).Log("msg", "Discovery receiver's channel was full, will retry the next cycle")
+					break
+				// Attempt to send the update.
+				case m.syncCh <- m.allGroups():
+					return
+				}
+			}
+		}
+	}
+
+	// Update as soon as we get trigger.
+	updateWhenTriggered()
+
+	// Rate-limit further triggers.
+	// Some discoverers send updates too often.
 	ticker := time.NewTicker(m.updatert)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
-		case <-ticker.C: // Some discoverers send updates too often, so we throttle these with the ticker.
-			select {
-			case <-m.triggerSend:
-				sentUpdates.WithLabelValues(m.name).Inc()
-				select {
-				case m.syncCh <- m.allGroups():
-				default:
-					delayedUpdates.WithLabelValues(m.name).Inc()
-					level.Debug(m.logger).Log("msg", "Discovery receiver's channel was full so will retry the next cycle")
-					select {
-					case m.triggerSend <- struct{}{}:
-					default:
-					}
-				}
-			default:
-			}
+		case <-ticker.C:
+			updateWhenTriggered()
+			ticker.Reset(m.updatert)
 		}
 	}
 }
