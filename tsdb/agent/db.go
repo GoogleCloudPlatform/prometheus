@@ -22,6 +22,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
+	gcm_exportsetup "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/pkg/errors"
@@ -295,6 +297,7 @@ func Open(l log.Logger, reg prometheus.Registerer, rs *remote.Storage, dir strin
 			pendingHistograms:      make([]record.RefHistogramSample, 0, 100),
 			pendingFloatHistograms: make([]record.RefFloatHistogramSample, 0, 100),
 			pendingExamplars:       make([]record.RefExemplar, 0, 10),
+			exportExemplars:        make(map[storage.SeriesRef]record.RefExemplar, 10),
 		}
 	}
 
@@ -304,6 +307,10 @@ func Open(l log.Logger, reg prometheus.Registerer, rs *remote.Storage, dir strin
 			return nil, errors.Wrap(err, "repair corrupted WAL")
 		}
 	}
+
+	gcm_exportsetup.Global().SetLabelsByIDFunc(func(id storage.SeriesRef) labels.Labels {
+		return db.series.GetByID(chunks.HeadSeriesRef(id)).lset
+	})
 
 	go db.run()
 	return db, nil
@@ -746,8 +753,12 @@ func (db *DB) ExemplarQuerier(ctx context.Context) (storage.ExemplarQuerier, err
 }
 
 // Appender implements storage.Storage.
-func (db *DB) Appender(_ context.Context) storage.Appender {
-	return db.appenderPool.Get().(storage.Appender)
+func (db *DB) Appender(ctx context.Context) storage.Appender {
+	a := db.appenderPool.Get().(*appender)
+	// Leave metadata getter as nil if it's not contained in the context.
+	a.metadata, _ = gcm_export.MetadataFuncFromContext(ctx)
+
+	return a
 }
 
 // Close implements the Storage interface.
@@ -783,6 +794,11 @@ type appender struct {
 	// Pointers to the series referenced by each element of pendingFloatHistograms.
 	// Series lock is not held on elements.
 	floatHistogramSeries []*memSeries
+
+	metadata gcm_export.MetadataFunc
+
+	// exemplars to be exported to GCM
+	exportExemplars map[storage.SeriesRef]record.RefExemplar
 }
 
 func (a *appender) Append(ref storage.SeriesRef, l labels.Labels, t int64, v float64) (storage.SeriesRef, error) {
@@ -890,12 +906,14 @@ func (a *appender) AppendExemplar(ref storage.SeriesRef, l labels.Labels, e exem
 	}
 	a.series.SetLatestExemplar(s.ref, &e)
 
-	a.pendingExamplars = append(a.pendingExamplars, record.RefExemplar{
+	refEx := record.RefExemplar{
 		Ref:    s.ref,
 		T:      e.Ts,
 		V:      e.Value,
 		Labels: e.Labels,
-	})
+	}
+	a.pendingExamplars = append(a.pendingExamplars, refEx)
+	a.exportExemplars[storage.SeriesRef(headRef)] = refEx
 
 	a.metrics.totalAppendedExemplars.Inc()
 	return storage.SeriesRef(s.ref), nil
@@ -1045,6 +1063,8 @@ func (a *appender) Commit() error {
 		}
 	}
 
+	gcm_exportsetup.Global().Export(a.metadata, a.pendingSamples, a.exportExemplars)
+
 	//nolint:staticcheck
 	a.bufPool.Put(buf)
 	return a.Rollback()
@@ -1059,6 +1079,7 @@ func (a *appender) Rollback() error {
 	a.sampleSeries = a.sampleSeries[:0]
 	a.histogramSeries = a.histogramSeries[:0]
 	a.floatHistogramSeries = a.floatHistogramSeries[:0]
+	a.exportExemplars = make(map[storage.SeriesRef]record.RefExemplar, len(a.pendingExamplars))
 	a.appenderPool.Put(a)
 	return nil
 }
