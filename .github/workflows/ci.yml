@@ -143,7 +143,7 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v3.3.0
         with:
-          version: v1.49.0
+          version: v1.55.2 # NOTE(bwplotka): Patched as our old version of Prometheus uses newer Go version now.
   fuzzing:
     uses: ./.github/workflows/fuzzing.yml
     if: github.event_name == 'pull_request'
