@@ -17,7 +17,8 @@ jobs:
       - run: make GO_ONLY=1 SKIP_GOLANGCI_LINT=1
       - run: go test ./tsdb/ -test.tsdb-isolation=false
       - run: GOARCH=386 go test ./cmd/prometheus
-      - run: make -C documentation/examples/remote_storage
+     # NOTE(bwplotka): Linting some example code can be skipped, somehow fetching golangci-lint fails for our fork.
+      - run: make SKIP_GOLANGCI_LINT=1 -C documentation/examples/remote_storage
       - run: make -C documentation/examples
       - uses: ./.github/actions/check_proto
         with:
