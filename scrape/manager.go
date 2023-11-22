@@ -138,21 +138,20 @@ type Options struct {
 	// Option to increase the interval used by scrape manager to throttle target groups updates.
 	DiscoveryReloadInterval model.Duration
 	// Option to enable discovering targets immediately on start up as opposed
-	// to waiting for the interval defined in DiscoveryReloadInterval before
-	// initializing the scrape pools. Disabled by default. Useful for serverless
-	// flavors of OpenTelemetry contrib's prometheusreceiver where we're
-	// sensitive to start up delays.
+	// to waiting for the interval defined in DiscoveryReloadInterval. Disabled by default.
+	//
+	// Useful for serverless flavors of OpenTelemetry contrib's prometheusreceiver.
 	DiscoveryReloadOnStartup bool
 
 	// Optional HTTP client options to use when scraping.
 	HTTPClientOptions []config_util.HTTPClientOption
 
 	// InitialScrapeOffset controls how long after startup we should scrape all
-	// targets.  By default, all targets have an offset so we spread the
+	// targets. By default, all targets have an offset, so we spread the
 	// scraping load evenly within the Prometheus server. Configuring this will
-	// make it so all targets have the same configured offset, which may be
-	// undesirable as load is no longer evenly spread.  This is useful however
-	// in serverless deployments where we're sensitive to the intitial offsets
+	// cause all targets to have the same static offset. This may be undesirable
+	// as load is no longer evenly spread, but is useful in serverless, sidecar
+	// based deployments where we're sensitive to the initial offsets
 	// and would like them to be small and configurable.
 	//
 	// NOTE(bwplotka): This option is experimental and not used by Prometheus.
@@ -258,8 +257,9 @@ func (m *Manager) reload() {
 		}(m.scrapePools[setName], groups)
 
 	}
-	m.mtxScrape.Unlock()
 	wg.Wait()
+	// Only unlock after all syncs finished.
+	m.mtxScrape.Unlock()
 }
 
 // setOffsetSeed calculates a global offsetSeed per server relying on extra label set.
@@ -287,9 +287,9 @@ func (m *Manager) Stop() {
 	close(m.graceShut)
 }
 
-// StopAfterScrapeAttempt stops manager after ensuring all targets' last scrape
-// attempt happened after minScrapeTime. It cancels all running scrape pools and
-// blocks until all have exited.
+// StopAfterScrapeAttempt is like Stop, but it stops manager only after ensuring
+// all targets' last scrape attempt happened after minScrapeTime. It cancels
+// all running scrape pools and blocks until all have exited. Not a cancellable operation.
 //
 // It is likely that such shutdown scrape will cause irregular scrape interval and
 // sudden efficiency (memory, CPU) spikes. However, it can be a fair tradeoff for
@@ -304,7 +304,8 @@ func (m *Manager) StopAfterScrapeAttempt(minScrapeTime time.Time) {
 
 	var wg sync.WaitGroup
 	for _, p := range m.scrapePools {
-		p.mtx.Lock()
+		// NOTE(bwplotka): Locking here is not needed, because mtxScrape.Lock()
+		// ensures that nothing changing scrape pools *should* get through.
 		for _, l := range p.loops {
 			l := l
 			wg.Add(1)
@@ -313,7 +314,6 @@ func (m *Manager) StopAfterScrapeAttempt(minScrapeTime time.Time) {
 				wg.Done()
 			}()
 		}
-		p.mtx.Unlock()
 	}
 	wg.Wait()
 
