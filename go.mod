@@ -202,6 +202,11 @@ require (
 )
 
 replace (
+	// This version is a hard-requirement because prometheus-engine needs this for fixes:
+	// - https://github.com/prometheus/common/pull/546
+	// - https://github.com/prometheus/common/pull/547
+	// prometheus/common v0.47 has these fixes but is incompatiable with this Prometheus version.
+	github.com/prometheus/common => github.com/TheSpiritXIII/prometheus-common v0.45.0-gmp.0
 	k8s.io/klog => github.com/simonpasquier/klog-gokit v0.3.0
 	k8s.io/klog/v2 => github.com/simonpasquier/klog-gokit/v3 v3.4.0
 )
