@@ -52,6 +52,7 @@ import (
 	"k8s.io/klog"
 	klogv2 "k8s.io/klog/v2"
 
+	common_config "github.com/prometheus/common/config"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery"
 	"github.com/prometheus/prometheus/discovery/legacymanager"
@@ -66,6 +67,7 @@ import (
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/rules"
 	"github.com/prometheus/prometheus/scrape"
+	"github.com/prometheus/prometheus/secrets/kubernetes"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/storage/remote"
 	"github.com/prometheus/prometheus/tracing"
@@ -591,6 +593,8 @@ func main() {
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
 
+		ctxSecrets = context.Background()
+
 		notifierManager = notifier.NewManager(&cfg.notifier, log.With(logger, "component", "notifier"))
 
 		ctxScrape, cancelScrape = context.WithCancel(context.Background())
@@ -608,6 +612,13 @@ func main() {
 		discoveryManagerScrape = legacymanager.NewManager(ctxScrape, log.With(logger, "component", "discovery manager scrape"), legacymanager.Name("scrape"))
 		discoveryManagerNotify = legacymanager.NewManager(ctxNotify, log.With(logger, "component", "discovery manager notify"), legacymanager.Name("notify"))
 	}
+
+	secretManager := kubernetes.NewManager(
+		ctxSecrets,
+		log.With(logger, "component", "secret manager"),
+	)
+
+	cfg.scrape.HTTPClientOptions = append(cfg.scrape.HTTPClientOptions, common_config.WithSecretManager(secretManager))
 
 	var (
 		scrapeManager  = scrape.NewManager(&cfg.scrape, log.With(logger, "component", "scrape manager"), fanoutStorage)
@@ -755,6 +766,14 @@ func main() {
 					c[v.JobName] = v.ServiceDiscoveryConfigs
 				}
 				return discoveryManagerScrape.ApplyConfig(c)
+			},
+		}, {
+			name: "secret",
+			reloader: func(cfg *config.Config) error {
+				kConfig := kubernetes.WatchSPConfig{
+					ClientConfig: cfg.ClientConfig,
+				}
+				return secretManager.ApplyConfig(ctxSecrets, &kConfig, cfg.SecretConfigs)
 			},
 		}, {
 			name:     "notify",
