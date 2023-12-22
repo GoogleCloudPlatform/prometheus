@@ -148,7 +148,7 @@ jobs:
       - name: Lint
         uses: golangci/golangci-lint-action@v3.4.0
         with:
-          version: v1.51.2
+          version: v1.54.2
   fuzzing:
     uses: ./.github/workflows/fuzzing.yml
     if: github.event_name == 'pull_request'
