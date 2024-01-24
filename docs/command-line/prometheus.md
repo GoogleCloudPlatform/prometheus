@@ -55,5 +55,26 @@ The Prometheus monitoring server
 | <code class="text-nowrap">--enable-feature</code> | Comma separated feature names to enable. Valid options: agent, exemplar-storage, expand-external-labels, memory-snapshot-on-shutdown, promql-at-modifier, promql-negative-offset, promql-per-step-stats, remote-write-receiver (DEPRECATED), extra-scrape-metrics, new-service-discovery-manager, auto-gomaxprocs, no-default-scrape-port, native-histograms. See https://prometheus.io/docs/prometheus/latest/feature_flags/ for more details. |  |
 | <code class="text-nowrap">--log.level</code> | Only log messages with the given severity or above. One of: [debug, info, warn, error] | `info` |
 | <code class="text-nowrap">--log.format</code> | Output format of log messages. One of: [logfmt, json] | `logfmt` |
+| <code class="text-nowrap">--export.disable</code> | Disable exporting to GCM. | `false` |
+| <code class="text-nowrap">--export.endpoint</code> | GCM API endpoint to send metric data to. | `monitoring.googleapis.com:443` |
+| <code class="text-nowrap">--export.compression</code> | The compression format to use for gRPC requests ('none' or 'gzip'). | `none` |
+| <code class="text-nowrap">--export.credentials-file</code> | Credentials file for authentication with the GCM API. |  |
+| <code class="text-nowrap">--export.label.project-id</code> | Default project ID set for all exported data. Prefer setting the external label "project_id" in the Prometheus configuration if not using the auto-discovered default. |  |
+| <code class="text-nowrap">--export.user-agent-mode</code> | Mode for user agent used for requests against the GCM API. Valid values are "gke", "kubectl", "on-prem", "baremetal" or "unspecified". | `unspecified` |
+| <code class="text-nowrap">--export.label.location</code> | The default location set for all exported data. Prefer setting the external label "location" in the Prometheus configuration if not using the auto-discovered default. |  |
+| <code class="text-nowrap">--export.label.cluster</code> | The default cluster set for all scraped targets. Prefer setting the external label "cluster" in the Prometheus configuration if not using the auto-discovered default. |  |
+| <code class="text-nowrap">--export.match</code> | A Prometheus time series matcher. Can be repeated. Every time series must match at least one of the matchers to be exported. This flag can be used equivalently to the match[] parameter of the Prometheus federation endpoint to selectively export data. (Example: --export.match='{job="prometheus"}' --export.match='{__name__=~"job:.*"}) |  |
+| <code class="text-nowrap">--export.debug.metric-prefix</code> | Google Cloud Monitoring metric prefix to use. | `prometheus.googleapis.com` |
+| <code class="text-nowrap">--export.debug.disable-auth</code> | Disable authentication (for debugging purposes). | `false` |
+| <code class="text-nowrap">--export.debug.batch-size</code> | Maximum number of points to send in one batch to the GCM API. | `200` |
+| <code class="text-nowrap">--export.debug.shard-count</code> | Number of shards that track series to send. | `200` |
+| <code class="text-nowrap">--export.debug.shard-buffer-size</code> | The buffer size for each individual shard. Each element in buffer (queue) consists of sample and hash. | `2048` |
+| <code class="text-nowrap">--export.token-url</code> | The request URL to generate token that's needed to ingest metrics to the project |  |
+| <code class="text-nowrap">--export.token-body</code> | The request Body to generate token that's needed to ingest metrics to the project. |  |
+| <code class="text-nowrap">--export.quota-project</code> | The projectID of an alternative project for quota attribution. |  |
+| <code class="text-nowrap">--export.ha.backend</code> | Which backend to use to coordinate HA pairs that both send metric data to the GCM API. Valid values are "none" or "kube" | `none` |
+| <code class="text-nowrap">--export.ha.kube.config</code> | Path to kube config file. |  |
+| <code class="text-nowrap">--export.ha.kube.namespace</code> | Namespace for the HA locking resource. Must be identical across replicas. May be set through the KUBE_NAMESPACE environment variable. |  |
+| <code class="text-nowrap">--export.ha.kube.name</code> | Name for the HA locking resource. Must be identical across replicas. May be set through the KUBE_NAME environment variable. |  |
 
 
