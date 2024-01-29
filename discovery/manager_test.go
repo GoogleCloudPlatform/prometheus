@@ -805,12 +805,12 @@ func TestTargetSetTargetGroupsPresentOnStartup(t *testing.T) {
 	discoveryManager.ApplyConfig(c)
 
 	syncedTargets := <-discoveryManager.SyncCh()
-	require.Equal(t, 1, len(syncedTargets))
+	require.Len(t, syncedTargets, 1)
 	verifySyncedPresence(t, syncedTargets, "prometheus", "{__address__=\"foo:9090\"}", true)
-	require.Equal(t, 1, len(syncedTargets["prometheus"]))
+	require.Len(t, syncedTargets["prometheus"], 1)
 	p := pk("static", "prometheus", 0)
 	verifyPresence(t, discoveryManager.targets, p, "{__address__=\"foo:9090\"}", true)
-	require.Equal(t, 1, len(discoveryManager.targets))
+	require.Len(t, discoveryManager.targets, 1)
 }
 
 func TestTargetSetTargetGroupsPresentOnConfigReload(t *testing.T) {
