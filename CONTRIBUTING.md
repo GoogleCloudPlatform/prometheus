@@ -1,33 +1,31 @@
-# Contributing
+# How to Contribute
 
-Prometheus uses GitHub to manage reviews of pull requests.
+We'd love to accept your patches and contributions to this project.
 
-* If you are a new contributor see: [Steps to Contribute](#steps-to-contribute)
+## Before you begin
 
-* If you have a trivial fix or improvement, go ahead and create a pull request,
-  addressing (with `@...`) a suitable maintainer of this repository (see
-  [MAINTAINERS.md](MAINTAINERS.md)) in the description of the pull request.
+### Sign our Contributor License Agreement
 
-* If you plan to do something more involved, first discuss your ideas
-  on our [mailing list](https://groups.google.com/forum/?fromgroups#!forum/prometheus-developers).
-  This will avoid unnecessary work and surely give you and us a good deal
-  of inspiration. Also please see our [non-goals issue](https://github.com/prometheus/docs/issues/149) on areas that the Prometheus community doesn't plan to work on.
+Contributions to this project must be accompanied by a
+[Contributor License Agreement](https://cla.developers.google.com/about) (CLA).
+You (or your employer) retain the copyright to your contribution; this simply
+gives us permission to use and redistribute your contributions as part of the
+project.
 
-* Relevant coding style guidelines are the [Go Code Review
-  Comments](https://code.google.com/p/go-wiki/wiki/CodeReviewComments)
-  and the _Formatting and style_ section of Peter Bourgon's [Go: Best
-  Practices for Production
-  Environments](https://peter.bourgon.org/go-in-production/#formatting-and-style).
+If you or your current employer have already signed the Google CLA (even if it
+was for a different project), you probably don't need to do it again.
 
-* Be sure to sign off on the [DCO](https://github.com/probot/dco#how-it-works).
+Visit <https://cla.developers.google.com/> to see your current agreements or to
+sign a new one.
 
-## Steps to Contribute
+### Review our Community Guidelines
 
-Should you wish to work on an issue, please claim it first by commenting on the GitHub issue that you want to work on it. This is to prevent duplicated efforts from contributors on the same issue.
+This project follows
+[Google's Open Source Community Guidelines](https://opensource.google/conduct/).
 
-Please check the [`low-hanging-fruit`](https://github.com/prometheus/prometheus/issues?q=is%3Aissue+is%3Aopen+label%3A%22low+hanging+fruit%22) label to find issues that are good for getting started. If you have questions about one of the issues, with or without the tag, please comment on them and one of the maintainers will clarify it. For a quicker response, contact us over [IRC](https://prometheus.io/community).
+## Contribution process
 
-You can [spin up a prebuilt dev environment](https://gitpod.io/#https://github.com/prometheus/prometheus) using Gitpod.io.
+### Code Reviews
 
 For complete instructions on how to compile see: [Building From Source](https://github.com/prometheus/prometheus#building-from-source)
 
