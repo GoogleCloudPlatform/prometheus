@@ -121,7 +121,7 @@ func TestFailedStartupExitCode(t *testing.T) {
 	fakeInputFile := "fake-input-file"
 	expectedExitStatus := 2
 
-	prom := exec.Command(promPath, "-test.main", "--web.listen-address=0.0.0.0:0", "--config.file="+fakeInputFile)
+	prom := exec.Command(promPath, "-test.main", "--web.listen-address=0.0.0.0:0", "--config.file="+fakeInputFile, "--export.debug.disable-auth")
 	err := prom.Run()
 	require.Error(t, err)
 
@@ -210,7 +210,7 @@ func TestWALSegmentSizeBounds(t *testing.T) {
 	}
 
 	for size, expectedExitStatus := range map[string]int{"9MB": 1, "257MB": 1, "10": 2, "1GB": 1, "12MB": 0} {
-		prom := exec.Command(promPath, "-test.main", "--storage.tsdb.wal-segment-size="+size, "--web.listen-address=0.0.0.0:0", "--config.file="+promConfig, "--storage.tsdb.path="+filepath.Join(t.TempDir(), "data"))
+		prom := exec.Command(promPath, "-test.main", "--storage.tsdb.wal-segment-size="+size, "--web.listen-address=0.0.0.0:0", "--config.file="+promConfig, "--storage.tsdb.path="+filepath.Join(t.TempDir(), "data"), "--export.debug.disable-auth")
 
 		// Log stderr in case of failure.
 		stderr, err := prom.StderrPipe()
@@ -256,7 +256,7 @@ func TestMaxBlockChunkSegmentSizeBounds(t *testing.T) {
 	}
 
 	for size, expectedExitStatus := range map[string]int{"512KB": 1, "1MB": 0} {
-		prom := exec.Command(promPath, "-test.main", "--storage.tsdb.max-block-chunk-segment-size="+size, "--web.listen-address=0.0.0.0:0", "--config.file="+promConfig, "--storage.tsdb.path="+filepath.Join(t.TempDir(), "data"))
+		prom := exec.Command(promPath, "-test.main", "--storage.tsdb.max-block-chunk-segment-size="+size, "--web.listen-address=0.0.0.0:0", "--config.file="+promConfig, "--storage.tsdb.path="+filepath.Join(t.TempDir(), "data"), "--export.debug.disable-auth")
 
 		// Log stderr in case of failure.
 		stderr, err := prom.StderrPipe()
@@ -358,7 +358,7 @@ func getCurrentGaugeValuesFor(t *testing.T, reg prometheus.Gatherer, metricNames
 }
 
 func TestAgentSuccessfulStartup(t *testing.T) {
-	prom := exec.Command(promPath, "-test.main", "--enable-feature=agent", "--web.listen-address=0.0.0.0:0", "--config.file="+agentConfig)
+	prom := exec.Command(promPath, "-test.main", "--enable-feature=agent", "--web.listen-address=0.0.0.0:0", "--config.file="+agentConfig, "--export.debug.disable-auth")
 	require.NoError(t, prom.Start())
 
 	actualExitStatus := 0
@@ -376,7 +376,7 @@ func TestAgentSuccessfulStartup(t *testing.T) {
 }
 
 func TestAgentFailedStartupWithServerFlag(t *testing.T) {
-	prom := exec.Command(promPath, "-test.main", "--enable-feature=agent", "--storage.tsdb.path=.", "--web.listen-address=0.0.0.0:0", "--config.file="+promConfig)
+	prom := exec.Command(promPath, "-test.main", "--enable-feature=agent", "--storage.tsdb.path=.", "--web.listen-address=0.0.0.0:0", "--config.file="+promConfig, "--export.debug.disable-auth")
 
 	output := bytes.Buffer{}
 	prom.Stderr = &output
@@ -403,7 +403,7 @@ func TestAgentFailedStartupWithServerFlag(t *testing.T) {
 }
 
 func TestAgentFailedStartupWithInvalidConfig(t *testing.T) {
-	prom := exec.Command(promPath, "-test.main", "--enable-feature=agent", "--web.listen-address=0.0.0.0:0", "--config.file="+promConfig)
+	prom := exec.Command(promPath, "-test.main", "--enable-feature=agent", "--web.listen-address=0.0.0.0:0", "--config.file="+promConfig, "--export.debug.disable-auth")
 	require.NoError(t, prom.Start())
 
 	actualExitStatus := 0
@@ -438,7 +438,7 @@ func TestModeSpecificFlags(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(fmt.Sprintf("%s mode with option %s", tc.mode, tc.arg), func(t *testing.T) {
-			args := []string{"-test.main", tc.arg, t.TempDir(), "--web.listen-address=0.0.0.0:0"}
+			args := []string{"-test.main", tc.arg, t.TempDir(), "--web.listen-address=0.0.0.0:0", "--export.debug.disable-auth"}
 
 			if tc.mode == "agent" {
 				args = append(args, "--enable-feature=agent", "--config.file="+agentConfig)

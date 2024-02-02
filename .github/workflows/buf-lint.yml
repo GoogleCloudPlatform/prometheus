@@ -11,6 +11,7 @@ jobs:
   buf:
     name: lint
     runs-on: ubuntu-latest
+    if: github.repository == 'prometheus/prometheus'
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - uses: bufbuild/buf-setup-action@382440cdb8ec7bc25a68d7b4711163d95f7cc3aa # v1.28.1
