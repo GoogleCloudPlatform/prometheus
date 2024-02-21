@@ -35,6 +35,7 @@ import (
 	"time"
 
 	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
+	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/secrets"
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/alecthomas/units"
 	"github.com/go-kit/log"
@@ -43,6 +44,7 @@ import (
 	"github.com/mwitkow/go-conntrack"
 	"github.com/oklog/run"
 	"github.com/prometheus/client_golang/prometheus"
+	common_config "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/promlog"
 	promlogflag "github.com/prometheus/common/promlog/flag"
@@ -154,6 +156,7 @@ type flagConfig struct {
 	enableNewSDManager         bool
 	enablePerStepStats         bool
 	enableAutoGOMAXPROCS       bool
+	enableKubeSecretProvider   bool
 
 	prometheusURL   string
 	corsRegexString string
@@ -201,6 +204,9 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 				c.tsdb.EnableNativeHistograms = true
 				c.scrape.EnableProtobufNegotiation = true
 				level.Info(logger).Log("msg", "Experimental native histogram support enabled.")
+			case "google-kubernetes-secret-provider":
+				c.enableKubeSecretProvider = true
+				level.Info(logger).Log("msg", "Experimental Kubernetes secret provider enabled.")
 			case "":
 				continue
 			case "promql-at-modifier", "promql-negative-offset":
@@ -608,6 +614,7 @@ func main() {
 	var (
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
+		ctxSecrets        = context.Background()
 
 		notifierManager = notifier.NewManager(&cfg.notifier, log.With(logger, "component", "notifier"))
 
@@ -625,6 +632,21 @@ func main() {
 		legacymanager.RegisterMetrics()
 		discoveryManagerScrape = legacymanager.NewManager(ctxScrape, log.With(logger, "component", "discovery manager scrape"), legacymanager.Name("scrape"))
 		discoveryManagerNotify = legacymanager.NewManager(ctxNotify, log.With(logger, "component", "discovery manager notify"), legacymanager.Name("notify"))
+	}
+
+	var secretManager *secrets.Manager
+	if cfg.enableKubeSecretProvider {
+		manager := secrets.NewManager(
+			ctxSecrets,
+			prometheus.DefaultRegisterer,
+			secrets.ProviderOptions{
+				Logger: log.With(logger, "component", "secret manager"),
+			},
+		)
+		secretManager = &manager
+		defer secretManager.Close(prometheus.DefaultRegisterer)
+
+		cfg.scrape.HTTPClientOptions = append(cfg.scrape.HTTPClientOptions, common_config.WithSecretManager(secretManager))
 	}
 
 	var (
@@ -773,6 +795,20 @@ func main() {
 					c[v.JobName] = v.ServiceDiscoveryConfigs
 				}
 				return discoveryManagerScrape.ApplyConfig(c)
+			},
+		}, {
+			name: "secret",
+			reloader: func(cfg *config.Config) error {
+				if secretManager == nil {
+					if len(cfg.SecretConfigs) > 0 {
+						return errors.New("secret providers are disabled")
+					}
+					return nil
+				}
+				kConfig := secrets.WatchSPConfig{
+					ClientConfig: cfg.ClientConfig,
+				}
+				return secretManager.ApplyConfig(&kConfig, cfg.SecretConfigs)
 			},
 		}, {
 			name:     "notify",
