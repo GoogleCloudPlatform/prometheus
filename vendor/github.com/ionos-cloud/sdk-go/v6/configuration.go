@@ -28,6 +28,7 @@ const (
 	IonosApiUrlEnvVar     = "IONOS_API_URL"
 	IonosPinnedCertEnvVar = "IONOS_PINNED_CERT"
 	IonosLogLevelEnvVar   = "IONOS_LOG_LEVEL"
+	IonosContractNumber   = "IONOS_CONTRACT_NUMBER"
 	DefaultIonosServerUrl = "https://api.ionos.com/cloudapi/v6"
 	DefaultIonosBasePath  = "/cloudapi/v6"
 	defaultMaxRetries     = 3
@@ -130,7 +131,7 @@ func NewConfiguration(username, password, token, hostUrl string) *Configuration 
 	cfg := &Configuration{
 		DefaultHeader:      make(map[string]string),
 		DefaultQueryParams: url.Values{},
-		UserAgent:          "ionos-cloud-sdk-go/v6.1.7",
+		UserAgent:          "ionos-cloud-sdk-go/v6.1.11",
 		Debug:              false,
 		Username:           username,
 		Password:           password,
@@ -140,6 +141,8 @@ func NewConfiguration(username, password, token, hostUrl string) *Configuration 
 		WaitTime:           defaultWaitTime,
 		Logger:             NewDefaultLogger(),
 		LogLevel:           getLogLevelFromEnv(),
+		Host:               getHost(hostUrl),
+		Scheme:             getScheme(hostUrl),
 		Servers: ServerConfigurations{
 			{
 				URL:         getServerUrl(hostUrl),
@@ -265,6 +268,26 @@ func getServerUrl(serverUrl string) string {
 		serverUrl = fmt.Sprintf("%s%s", serverUrl, DefaultIonosBasePath)
 	}
 	return serverUrl
+}
+
+func getHost(serverUrl string) string {
+	// url.Parse only interprets the host correctly when the scheme is set, so we prepend one here if needed
+	if !strings.HasPrefix(serverUrl, "https://") && !strings.HasPrefix(serverUrl, "http://") {
+		serverUrl = "http://" + serverUrl
+	}
+	url, err := url.Parse(serverUrl)
+	if err != nil {
+		return ""
+	}
+	return url.Host
+}
+
+func getScheme(serverUrl string) string {
+	url, err := url.Parse(serverUrl)
+	if err != nil {
+		return ""
+	}
+	return url.Scheme
 }
 
 // ServerURLWithContext returns a new server URL given an endpoint

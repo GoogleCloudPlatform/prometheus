@@ -1,6 +1,7 @@
 package linodego
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -97,8 +98,20 @@ func (e APIError) Error() string {
 	return strings.Join(x, "; ")
 }
 
-func (g Error) Error() string {
-	return fmt.Sprintf("[%03d] %s", g.Code, g.Message)
+func (err Error) Error() string {
+	return fmt.Sprintf("[%03d] %s", err.Code, err.Message)
+}
+
+func (err Error) StatusCode() int {
+	return err.Code
+}
+
+func (err Error) Is(target error) bool {
+	if x, ok := target.(interface{ StatusCode() int }); ok || errors.As(target, &x) {
+		return err.StatusCode() == x.StatusCode()
+	}
+
+	return false
 }
 
 // NewError creates a linodego.Error with a Code identifying the source err type,
@@ -135,4 +148,35 @@ func NewError(err any) *Error {
 	default:
 		return &Error{Code: ErrorUnsupported, Message: fmt.Sprintf("Unsupported type to linodego.NewError: %s", reflect.TypeOf(e))}
 	}
+}
+
+// IsNotFound indicates if err indicates a 404 Not Found error from the Linode API.
+func IsNotFound(err error) bool {
+	return ErrHasStatus(err, http.StatusNotFound)
+}
+
+// ErrHasStatus checks if err is an error from the Linode API, and whether it contains the given HTTP status code.
+// More than one status code may be given.
+// If len(code) == 0, err is nil or is not a [Error], ErrHasStatus will return false.
+func ErrHasStatus(err error, code ...int) bool {
+	if err == nil {
+		return false
+	}
+
+	// Short-circuit if the caller did not provide any status codes.
+	if len(code) == 0 {
+		return false
+	}
+
+	var e *Error
+	if !errors.As(err, &e) {
+		return false
+	}
+	ec := e.StatusCode()
+	for _, c := range code {
+		if ec == c {
+			return true
+		}
+	}
+	return false
 }

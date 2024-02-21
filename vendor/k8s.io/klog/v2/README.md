@@ -76,10 +76,6 @@ This table is rather opinionated and build for use with the Kubernetes' [Go clie
 This project doesn't aim at covering the complete `klog` API. That being said, it should work ok for
 projects that use `k8s.io/client-go` (like [Prometheus](https://github.com/prometheus/prometheus) for instance).
 
-## Limitations
-
-The module implements the `klog.Context(context.Context)`, `klog.Background()` and `klog.TODO()` functions but they all return a zero-value `Logger` which drops all log messages.
-
 ## License
 
 Apache License 2.0, see [LICENSE](https://github.com/simonpasquier/klog-gokit/blob/master/LICENSE).

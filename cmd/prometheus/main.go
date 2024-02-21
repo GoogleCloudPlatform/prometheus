@@ -36,6 +36,7 @@ import (
 	"time"
 
 	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
+	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/secrets"
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/alecthomas/units"
 	"github.com/go-kit/log"
@@ -46,6 +47,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	versioncollector "github.com/prometheus/client_golang/prometheus/collectors/version"
+	common_config "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/promlog"
 	promlogflag "github.com/prometheus/common/promlog/flag"
@@ -163,6 +165,7 @@ type flagConfig struct {
 	enableAutoGOMAXPROCS       bool
 	enableAutoGOMEMLIMIT       bool
 	enableConcurrentRuleEval   bool
+	enableKubeSecretProvider   bool
 
 	prometheusURL   string
 	corsRegexString string
@@ -231,6 +234,11 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 				config.DefaultConfig.GlobalConfig.ScrapeProtocols = config.DefaultProtoFirstScrapeProtocols
 				config.DefaultGlobalConfig.ScrapeProtocols = config.DefaultProtoFirstScrapeProtocols
 				level.Info(logger).Log("msg", "Experimental created timestamp zero ingestion enabled. Changed default scrape_protocols to prefer PrometheusProto format.", "global.scrape_protocols", fmt.Sprintf("%v", config.DefaultGlobalConfig.ScrapeProtocols))
+				c.scrape.EnableProtobufNegotiation = true
+				level.Info(logger).Log("msg", "Experimental native histogram support enabled.")
+			case "google-kubernetes-secret-provider":
+				c.enableKubeSecretProvider = true
+				level.Info(logger).Log("msg", "Experimental Kubernetes secret provider enabled.")
 			case "":
 				continue
 			case "promql-at-modifier", "promql-negative-offset":
@@ -662,6 +670,7 @@ func main() {
 	var (
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
+		ctxSecrets        = context.Background()
 
 		notifierManager = notifier.NewManager(&cfg.notifier, log.With(logger, "component", "notifier"))
 
@@ -735,6 +744,21 @@ func main() {
 	if err != nil {
 		level.Error(logger).Log("msg", "failed to create a scrape manager", "err", err)
 		os.Exit(1)
+	}
+
+	var secretManager *secrets.Manager
+	if cfg.enableKubeSecretProvider {
+		manager := secrets.NewManager(
+			ctxSecrets,
+			prometheus.DefaultRegisterer,
+			secrets.ProviderOptions{
+				Logger: log.With(logger, "component", "secret manager"),
+			},
+		)
+		secretManager = &manager
+		defer secretManager.Close(prometheus.DefaultRegisterer)
+
+		cfg.scrape.HTTPClientOptions = append(cfg.scrape.HTTPClientOptions, common_config.WithSecretManager(secretManager))
 	}
 
 	var (
@@ -901,6 +925,20 @@ func main() {
 					c[v.JobName] = v.ServiceDiscoveryConfigs
 				}
 				return discoveryManagerScrape.ApplyConfig(c)
+			},
+		}, {
+			name: "secret",
+			reloader: func(cfg *config.Config) error {
+				if secretManager == nil {
+					if len(cfg.SecretConfigs) > 0 {
+						return errors.New("secret providers are disabled")
+					}
+					return nil
+				}
+				kConfig := secrets.WatchSPConfig{
+					ClientConfig: cfg.ClientConfig,
+				}
+				return secretManager.ApplyConfig(&kConfig, cfg.SecretConfigs)
 			},
 		}, {
 			name:     "notify",

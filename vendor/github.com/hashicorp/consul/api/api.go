@@ -1,3 +1,6 @@
+// Copyright (c) HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package api
 
 import (
@@ -113,6 +116,13 @@ type QueryOptions struct {
 	// Partition overrides the `default` partition
 	// Note: Partitions are available only in Consul Enterprise
 	Partition string
+
+	// SamenessGroup is used find the SamenessGroup in the given
+	// Partition and will find the failover order for the Service
+	// from the SamenessGroup Members, with the given Partition being
+	// the first member.
+	// Note: SamenessGroups are available only in Consul Enterprise
+	SamenessGroup string
 
 	// Providing a datacenter overwrites the DC provided
 	// by the Config
@@ -833,12 +843,27 @@ func (r *request) setQueryOptions(q *QueryOptions) {
 		return
 	}
 	if q.Namespace != "" {
+		// For backwards-compatibility with existing tests,
+		// use the short-hand query param name "ns"
+		// rather than the alternative long-hand "namespace"
 		r.params.Set("ns", q.Namespace)
 	}
 	if q.Partition != "" {
+		// For backwards-compatibility with existing tests,
+		// use the long-hand query param name "partition"
+		// rather than the alternative short-hand "ap"
 		r.params.Set("partition", q.Partition)
 	}
+	if q.SamenessGroup != "" {
+		// For backwards-compatibility with existing tests,
+		// use the long-hand query param name "sameness-group"
+		// rather than the alternative short-hand "sg"
+		r.params.Set("sameness-group", q.SamenessGroup)
+	}
 	if q.Datacenter != "" {
+		// For backwards-compatibility with existing tests,
+		// use the short-hand query param name "dc"
+		// rather than the alternative long-hand "datacenter"
 		r.params.Set("dc", q.Datacenter)
 	}
 	if q.Peer != "" {
@@ -946,12 +971,16 @@ func (r *request) setWriteOptions(q *WriteOptions) {
 	if q == nil {
 		return
 	}
+	// For backwards-compatibility, continue to use the shorthand "ns"
+	// rather than "namespace"
 	if q.Namespace != "" {
 		r.params.Set("ns", q.Namespace)
 	}
 	if q.Partition != "" {
 		r.params.Set("partition", q.Partition)
 	}
+	// For backwards-compatibility, continue to use the shorthand "dc"
+	// rather than "datacenter"
 	if q.Datacenter != "" {
 		r.params.Set("dc", q.Datacenter)
 	}
@@ -982,6 +1011,19 @@ func (r *request) toHTTP() (*http.Request, error) {
 	req, err := http.NewRequest(r.method, r.url.RequestURI(), r.body)
 	if err != nil {
 		return nil, err
+	}
+
+	// validate that socket communications that do not use the host, detect
+	// slashes in the host name and replace it with local host.
+	// this is required since go started validating req.host in 1.20.6 and 1.19.11.
+	// prior to that they would strip out the slashes for you.  They removed that
+	// behavior and added more strict validation as part of a CVE.
+	// This issue is being tracked by the Go team:
+	// https://github.com/golang/go/issues/61431
+	// If there is a resolution in this issue, we will remove this code.
+	// In the time being, this is the accepted workaround.
+	if strings.HasPrefix(r.url.Host, "/") {
+		r.url.Host = "localhost"
 	}
 
 	req.URL.Host = r.url.Host
@@ -1097,6 +1139,23 @@ func (c *Client) write(endpoint string, in, out interface{}, q *WriteOptions) (*
 	} else if _, err := io.ReadAll(resp.Body); err != nil {
 		return nil, err
 	}
+	return wm, nil
+}
+
+// delete is used to do a DELETE request against an endpoint
+func (c *Client) delete(endpoint string, q *QueryOptions) (*WriteMeta, error) {
+	r := c.newRequest("DELETE", endpoint)
+	r.setQueryOptions(q)
+	rtt, resp, err := c.doRequest(r)
+	if err != nil {
+		return nil, err
+	}
+	defer closeResponseBody(resp)
+	if err = requireHttpCodes(resp, 204, 200); err != nil {
+		return nil, err
+	}
+
+	wm := &WriteMeta{RequestTime: rtt}
 	return wm, nil
 }
 

@@ -22,6 +22,7 @@ var (
 	// if set to this address, a nil value will be marshalled
 	Nilstring string = "<<ExplicitNil>>"
 	Nilint32  int32  = -334455
+	Nilbool   bool   = false
 )
 
 // ToPtr - returns a pointer to the given value.

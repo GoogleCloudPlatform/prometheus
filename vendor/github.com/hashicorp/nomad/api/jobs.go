@@ -4,15 +4,17 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"net/url"
 	"sort"
 	"strconv"
 	"time"
 
 	"github.com/hashicorp/cronexpr"
-	"golang.org/x/exp/maps"
 )
 
 const (
@@ -447,6 +449,9 @@ func (j *Jobs) PlanOpts(job *Job, opts *PlanOptions, q *WriteOptions) (*JobPlanR
 	if job == nil {
 		return nil, nil, errors.New("must pass non-nil job")
 	}
+	if job.ID == nil {
+		return nil, nil, errors.New("job is missing ID")
+	}
 
 	// Setup the request
 	req := &JobPlanRequest{
@@ -818,8 +823,9 @@ type MultiregionRegion struct {
 
 // PeriodicConfig is for serializing periodic config for a job.
 type PeriodicConfig struct {
-	Enabled         *bool   `hcl:"enabled,optional"`
-	Spec            *string `hcl:"cron,optional"`
+	Enabled         *bool    `hcl:"enabled,optional"`
+	Spec            *string  `hcl:"cron,optional"`
+	Specs           []string `hcl:"crons,optional"`
 	SpecType        *string
 	ProhibitOverlap *bool   `mapstructure:"prohibit_overlap" hcl:"prohibit_overlap,optional"`
 	TimeZone        *string `mapstructure:"time_zone" hcl:"time_zone,optional"`
@@ -831,6 +837,9 @@ func (p *PeriodicConfig) Canonicalize() {
 	}
 	if p.Spec == nil {
 		p.Spec = pointerOf("")
+	}
+	if p.Specs == nil {
+		p.Specs = []string{}
 	}
 	if p.SpecType == nil {
 		p.SpecType = pointerOf(PeriodicSpecCron)
@@ -848,30 +857,43 @@ func (p *PeriodicConfig) Canonicalize() {
 // returned. The `time.Location` of the returned value matches that of the
 // passed time.
 func (p *PeriodicConfig) Next(fromTime time.Time) (time.Time, error) {
+	// Single spec parsing
 	if p != nil && *p.SpecType == PeriodicSpecCron {
-		e, err := cronexpr.Parse(*p.Spec)
-		if err != nil {
-			return time.Time{}, fmt.Errorf("failed parsing cron expression %q: %v", *p.Spec, err)
+		if p.Spec != nil && *p.Spec != "" {
+			return cronParseNext(fromTime, *p.Spec)
 		}
-		return cronParseNext(e, fromTime, *p.Spec)
 	}
 
-	return time.Time{}, nil
+	// multiple specs parsing
+	var nextTime time.Time
+	for _, spec := range p.Specs {
+		t, err := cronParseNext(fromTime, spec)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("failed parsing cron expression %s: %v", spec, err)
+		}
+		if nextTime.IsZero() || t.Before(nextTime) {
+			nextTime = t
+		}
+	}
+	return nextTime, nil
 }
 
 // cronParseNext is a helper that parses the next time for the given expression
 // but captures any panic that may occur in the underlying library.
 // ---  THIS FUNCTION IS REPLICATED IN nomad/structs/structs.go
 // and should be kept in sync.
-func cronParseNext(e *cronexpr.Expression, fromTime time.Time, spec string) (t time.Time, err error) {
+func cronParseNext(fromTime time.Time, spec string) (t time.Time, err error) {
 	defer func() {
 		if recover() != nil {
 			t = time.Time{}
 			err = fmt.Errorf("failed parsing cron expression: %q", spec)
 		}
 	}()
-
-	return e.Next(fromTime), nil
+	exp, err := cronexpr.Parse(spec)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed parsing cron expression: %s: %v", spec, err)
+	}
+	return exp.Next(fromTime), nil
 }
 
 func (p *PeriodicConfig) GetLocation() (*time.Location, error) {
@@ -911,6 +933,52 @@ type JobSubmission struct {
 	Variables string
 }
 
+type JobUIConfig struct {
+	Description string       `hcl:"description,optional"`
+	Links       []*JobUILink `hcl:"link,block"`
+}
+
+type JobUILink struct {
+	Label string `hcl:"label,optional"`
+	URL   string `hcl:"url,optional"`
+}
+
+func (j *JobUIConfig) Canonicalize() {
+	if j == nil {
+		return
+	}
+
+	if len(j.Links) == 0 {
+		j.Links = nil
+	}
+}
+
+func (j *JobUIConfig) Copy() *JobUIConfig {
+	if j == nil {
+		return nil
+	}
+
+	copy := new(JobUIConfig)
+	copy.Description = j.Description
+
+	for _, link := range j.Links {
+		copy.Links = append(copy.Links, link.Copy())
+	}
+
+	return copy
+}
+
+func (j *JobUILink) Copy() *JobUILink {
+	if j == nil {
+		return nil
+	}
+
+	return &JobUILink{
+		Label: j.Label,
+		URL:   j.URL,
+	}
+}
+
 func (js *JobSubmission) Canonicalize() {
 	if js == nil {
 		return
@@ -946,7 +1014,7 @@ type Job struct {
 	Priority         *int                    `hcl:"priority,optional"`
 	AllAtOnce        *bool                   `mapstructure:"all_at_once" hcl:"all_at_once,optional"`
 	Datacenters      []string                `hcl:"datacenters,optional"`
-	NodePool         *string                 `hcl:"node_pool,optional"`
+	NodePool         *string                 `mapstructure:"node_pool" hcl:"node_pool,optional"`
 	Constraints      []*Constraint           `hcl:"constraint,block"`
 	Affinities       []*Affinity             `hcl:"affinity,block"`
 	TaskGroups       []*TaskGroup            `hcl:"group,block"`
@@ -960,6 +1028,7 @@ type Job struct {
 	Meta             map[string]string       `hcl:"meta,block"`
 	ConsulToken      *string                 `mapstructure:"consul_token" hcl:"consul_token,optional"`
 	VaultToken       *string                 `mapstructure:"vault_token" hcl:"vault_token,optional"`
+	UI               *JobUIConfig            `hcl:"ui,block"`
 
 	/* Fields set by server, not sourced from job config file */
 
@@ -1019,7 +1088,7 @@ func (j *Job) Canonicalize() {
 		j.Region = pointerOf(GlobalRegion)
 	}
 	if j.NodePool == nil {
-		j.NodePool = pointerOf(NodePoolDefault)
+		j.NodePool = pointerOf("")
 	}
 	if j.Type == nil {
 		j.Type = pointerOf("service")
@@ -1084,6 +1153,10 @@ func (j *Job) Canonicalize() {
 	}
 	for _, a := range j.Affinities {
 		a.Canonicalize()
+	}
+
+	if j.UI != nil {
+		j.UI.Canonicalize()
 	}
 }
 
@@ -1493,4 +1566,41 @@ type JobEvaluateRequest struct {
 // EvalOptions is used to encapsulate options when forcing a job evaluation
 type EvalOptions struct {
 	ForceReschedule bool
+}
+
+// ActionExec is used to run a pre-defined command inside a running task.
+// The call blocks until command terminates (or an error occurs), and returns the exit code.
+func (j *Jobs) ActionExec(ctx context.Context,
+	alloc *Allocation, job string, task string, tty bool, command []string,
+	action string,
+	stdin io.Reader, stdout, stderr io.Writer,
+	terminalSizeCh <-chan TerminalSize, q *QueryOptions) (exitCode int, err error) {
+
+	s := &execSession{
+		client:  j.client,
+		alloc:   alloc,
+		job:     job,
+		task:    task,
+		tty:     tty,
+		command: command,
+		action:  action,
+
+		stdin:  stdin,
+		stdout: stdout,
+		stderr: stderr,
+
+		terminalSizeCh: terminalSizeCh,
+		q:              q,
+	}
+
+	return s.run(ctx)
+}
+
+// JobStatusesRequest is used to get statuses for jobs,
+// their allocations and deployments.
+type JobStatusesRequest struct {
+	// Jobs may be optionally provided to request a subset of specific jobs.
+	Jobs []NamespacedID
+	// IncludeChildren will include child (batch) jobs in the response.
+	IncludeChildren bool
 }

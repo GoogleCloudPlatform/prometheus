@@ -5,6 +5,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 )
 
@@ -88,12 +89,36 @@ func (n *NodePools) Delete(name string, w *WriteOptions) (*WriteMeta, error) {
 	return wm, nil
 }
 
+// ListJobs is used to list all the jobs in a node pool.
+func (n *NodePools) ListJobs(poolName string, q *QueryOptions) ([]*JobListStub, *QueryMeta, error) {
+	var resp []*JobListStub
+	qm, err := n.client.query(
+		fmt.Sprintf("/v1/node/pool/%s/jobs", url.PathEscape(poolName)),
+		&resp, q)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp, qm, nil
+}
+
+// ListNodes is used to list all the nodes in a node pool.
+func (n *NodePools) ListNodes(poolName string, q *QueryOptions) ([]*NodeListStub, *QueryMeta, error) {
+	var resp []*NodeListStub
+	qm, err := n.client.query(
+		fmt.Sprintf("/v1/node/pool/%s/nodes", url.PathEscape(poolName)),
+		&resp, q)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp, qm, nil
+}
+
 // NodePool is used to serialize a node pool.
 type NodePool struct {
 	Name                   string                          `hcl:"name,label"`
 	Description            string                          `hcl:"description,optional"`
 	Meta                   map[string]string               `hcl:"meta,block"`
-	SchedulerConfiguration *NodePoolSchedulerConfiguration `hcl:"scheduler_configuration,block"`
+	SchedulerConfiguration *NodePoolSchedulerConfiguration `hcl:"scheduler_config,block"`
 	CreateIndex            uint64
 	ModifyIndex            uint64
 }
@@ -101,5 +126,6 @@ type NodePool struct {
 // NodePoolSchedulerConfiguration is used to serialize the scheduler
 // configuration of a node pool.
 type NodePoolSchedulerConfiguration struct {
-	SchedulerAlgorithm SchedulerAlgorithm `hcl:"scheduler_algorithm,optional"`
+	SchedulerAlgorithm            SchedulerAlgorithm `hcl:"scheduler_algorithm,optional"`
+	MemoryOversubscriptionEnabled *bool              `hcl:"memory_oversubscription_enabled,optional"`
 }
