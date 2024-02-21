@@ -8,7 +8,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.2.1
 	github.com/Azure/go-autorest/autorest v0.11.29
 	github.com/Azure/go-autorest/autorest/adal v0.9.23
-	github.com/GoogleCloudPlatform/prometheus-engine v0.11.0-rc.0
+	github.com/GoogleCloudPlatform/prometheus-engine v0.11.0-rc.2
 	github.com/alecthomas/kingpin/v2 v2.4.0
 	github.com/alecthomas/units v0.0.0-20211218093645-b94a6e3cc137
 	github.com/aws/aws-sdk-go v1.44.276
@@ -19,7 +19,7 @@ require (
 	github.com/edsrzf/mmap-go v1.1.0
 	github.com/envoyproxy/go-control-plane v0.11.1
 	github.com/envoyproxy/protoc-gen-validate v1.0.2
-	github.com/fsnotify/fsnotify v1.6.0
+	github.com/fsnotify/fsnotify v1.7.0
 	github.com/go-kit/log v0.2.1
 	github.com/go-logfmt/logfmt v0.6.0
 	github.com/go-openapi/strfmt v0.21.7
@@ -46,7 +46,7 @@ require (
 	github.com/prometheus/alertmanager v0.25.1
 	github.com/prometheus/client_golang v1.18.0
 	github.com/prometheus/client_model v0.5.0
-	github.com/prometheus/common v0.45.0
+	github.com/prometheus/common v0.47.0
 	github.com/prometheus/common/assets v0.2.0
 	github.com/prometheus/common/sigv4 v0.1.0
 	github.com/prometheus/exporter-toolkit v0.10.0
@@ -206,7 +206,11 @@ replace (
 	// - https://github.com/prometheus/common/pull/546
 	// - https://github.com/prometheus/common/pull/547
 	// prometheus/common v0.47 has these fixes but is incompatiable with this Prometheus version.
-	github.com/prometheus/common => github.com/TheSpiritXIII/prometheus-common v0.45.0-gmp.0
+	//
+	// We also need these changes for secret management:
+	// - https://github.com/prometheus/common/pull/538
+	// - https://github.com/prometheus/common/pull/572
+	github.com/prometheus/common => github.com/TheSpiritXIII/prometheus-common v0.45.0-gmp.1
 	k8s.io/klog => github.com/simonpasquier/klog-gokit v0.3.0
 	k8s.io/klog/v2 => github.com/simonpasquier/klog-gokit/v3 v3.4.0
 )
