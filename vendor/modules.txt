@@ -100,11 +100,12 @@ github.com/Code-Hex/go-generics-cache/policy/lfu
 github.com/Code-Hex/go-generics-cache/policy/lru
 github.com/Code-Hex/go-generics-cache/policy/mru
 github.com/Code-Hex/go-generics-cache/policy/simple
-# github.com/GoogleCloudPlatform/prometheus-engine v0.11.0-rc.0
+# github.com/GoogleCloudPlatform/prometheus-engine v0.11.0-rc.2
 ## explicit; go 1.21
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/lease
+github.com/GoogleCloudPlatform/prometheus-engine/pkg/secrets
 # github.com/KimMachineGun/automemlimit v0.6.1
 ## explicit; go 1.21
 github.com/KimMachineGun/automemlimit/memlimit

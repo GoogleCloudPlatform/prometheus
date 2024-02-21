@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/secrets"
 	"github.com/alecthomas/units"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -238,6 +239,10 @@ type Config struct {
 	ScrapeConfigs     []*ScrapeConfig `yaml:"scrape_configs,omitempty"`
 	StorageConfig     StorageConfig   `yaml:"storage,omitempty"`
 	TracingConfig     TracingConfig   `yaml:"tracing,omitempty"`
+
+	// Secret management:
+	secrets.ClientConfig `yaml:"kubernetes_sp_config,omitempty"`
+	SecretConfigs        []secrets.SecretConfig `yaml:"kubernetes_secrets,omitempty"`
 
 	RemoteWriteConfigs []*RemoteWriteConfig `yaml:"remote_write,omitempty"`
 	RemoteReadConfigs  []*RemoteReadConfig  `yaml:"remote_read,omitempty"`
