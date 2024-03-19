@@ -69,8 +69,9 @@ The Prometheus monitoring server
 | <code class="text-nowrap">--export.debug.metric-prefix</code> | Google Cloud Monitoring metric prefix to use. | `prometheus.googleapis.com` |
 | <code class="text-nowrap">--export.debug.disable-auth</code> | Disable authentication (for debugging purposes). | `false` |
 | <code class="text-nowrap">--export.debug.batch-size</code> | Maximum number of points to send in one batch to the GCM API. | `200` |
-| <code class="text-nowrap">--export.debug.shard-count</code> | Number of shards that track series to send. | `200` |
+| <code class="text-nowrap">--export.debug.shard-count</code> | Number of shards that track series to send. | `1024` |
 | <code class="text-nowrap">--export.debug.shard-buffer-size</code> | The buffer size for each individual shard. Each element in buffer (queue) consists of sample and hash. | `2048` |
+| <code class="text-nowrap">--export.debug.fetch-metadata-timeout</code> | The total timeout for the initial gathering of the best-effort GCP data from the metadata server. This data is used for special labels required by Prometheus metrics (e.g. project id, location, cluster name), as well as information for the user agent. This is done on startup, so make sure this work to be faster than your readiness and liveliness probes. | `10s` |
 | <code class="text-nowrap">--export.token-url</code> | The request URL to generate token that's needed to ingest metrics to the project |  |
 | <code class="text-nowrap">--export.token-body</code> | The request Body to generate token that's needed to ingest metrics to the project. |  |
 | <code class="text-nowrap">--export.quota-project</code> | The projectID of an alternative project for quota attribution. |  |

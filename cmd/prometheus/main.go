@@ -1051,7 +1051,8 @@ func main() {
 		)
 	}
 	{
-		exporter, err := newExporter(log.With(logger, "component", "gcm_exporter"), prometheus.DefaultRegisterer)
+		ctx, cancel := context.WithCancel(context.Background())
+		exporter, err := newExporter(ctx, log.With(logger, "component", "gcm_exporter"), prometheus.DefaultRegisterer)
 		if err != nil {
 			level.Error(logger).Log("msg", "Unable to init Google Cloud Monitoring exporter", "err", err)
 			os.Exit(2)
@@ -1060,7 +1061,6 @@ func main() {
 			level.Error(logger).Log("msg", "Unable to set Google Cloud Monitoring exporter", "err", err)
 			os.Exit(2)
 		}
-		ctx, cancel := context.WithCancel(context.Background())
 
 		g.Add(
 			func() error {

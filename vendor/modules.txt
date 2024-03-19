@@ -100,7 +100,7 @@ github.com/Code-Hex/go-generics-cache/policy/lfu
 github.com/Code-Hex/go-generics-cache/policy/lru
 github.com/Code-Hex/go-generics-cache/policy/mru
 github.com/Code-Hex/go-generics-cache/policy/simple
-# github.com/GoogleCloudPlatform/prometheus-engine v0.11.0-rc.2
+# github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.2
 ## explicit; go 1.21
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup
@@ -1496,8 +1496,9 @@ sigs.k8s.io/structured-merge-diff/v4/merge
 sigs.k8s.io/structured-merge-diff/v4/schema
 sigs.k8s.io/structured-merge-diff/v4/typed
 sigs.k8s.io/structured-merge-diff/v4/value
-# sigs.k8s.io/yaml v1.3.0
+# sigs.k8s.io/yaml v1.4.0
 ## explicit; go 1.12
 sigs.k8s.io/yaml
+sigs.k8s.io/yaml/goyaml.v2
 # k8s.io/klog => github.com/simonpasquier/klog-gokit v0.3.0
 # k8s.io/klog/v2 => github.com/simonpasquier/klog-gokit/v3 v3.4.0
