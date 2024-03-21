@@ -1,7 +1,7 @@
 ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs
-ARG IMAGE_BUILD_GO=golang:1.20-bullseye
+ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.20.14@sha256:6f86d8a81ff191bee8d3ff8b4c193889560b4ca15df373d5084953c5c860190f
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/static-debian11:debug
-ARG IMAGE_BASE=gcr.io/distroless/static-debian11
+ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc@sha256:4f834e207f2721977094aeec4c9daee7032c5daec2083c0be97760f4306e4f88
 
 FROM ${IMAGE_BUILD_GO} AS gobase
 
@@ -23,16 +23,11 @@ RUN make npm_licenses
 FROM gobase as buildbase
 WORKDIR /app
 COPY --from=assets /app ./
-RUN CGO_ENABLED=0 GOEXPERIMENT=boringcrypto go build \
-    -tags builtinassets -mod=vendor \
+RUN CGO_ENABLED=1 GOEXPERIMENT=boringcrypto go build \
+    -tags boring,builtinassets -mod=vendor \
     -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
     -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
     ./cmd/prometheus
-RUN CGO_ENABLED=0 GOEXPERIMENT=boringcrypto go build \
-    -mod=vendor \
-    -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
-    -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
-    ./cmd/promtool
 
 # Configure distroless base image like the upstream Prometheus image.
 # Since the directory and symlink setup needs shell access, we need yet another
@@ -48,7 +43,6 @@ RUN ["/busybox/sh", "-c", "mkdir -p /prometheus"]
 FROM ${IMAGE_BASE}
 
 COPY --from=buildbase /app/prometheus /bin/prometheus
-COPY --from=buildbase /app/promtool /bin/promtool
 COPY --from=appbase --chown=nobody:nobody /etc/prometheus /etc/prometheus
 COPY --from=appbase --chown=nobody:nobody /prometheus /prometheus
 COPY --from=appbase /usr/share/prometheus /usr/share/prometheus
