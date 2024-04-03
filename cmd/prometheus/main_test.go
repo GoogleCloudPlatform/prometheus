@@ -345,6 +345,71 @@ func getCurrentGaugeValuesFor(t *testing.T, reg prometheus.Gatherer, metricNames
 	return res
 }
 
+func TestDeleteStorageDataOnStart(t *testing.T) {
+	for _, agentMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("%v", agentMode), func(t *testing.T) {
+			t.Run("empty", func(t *testing.T) {
+				dir := t.TempDir()
+
+				require.NoError(t, deleteStorageData(agentMode, dir))
+				requireEmptyDir(t, dir)
+			})
+			t.Run("partial data", func(t *testing.T) {
+				dir := t.TempDir()
+
+				if !agentMode {
+					require.NoError(t, os.Mkdir(filepath.Join(dir, "chunks_head"), os.ModePerm))
+				}
+				require.NoError(t, os.Mkdir(filepath.Join(dir, "wal"), os.ModePerm))
+				require.NoError(t, os.Mkdir(filepath.Join(dir, "wal", "checkpoint.00000003"), os.ModePerm))
+
+				require.NoError(t, deleteStorageData(agentMode, dir))
+				requireEmptyDir(t, dir)
+			})
+			t.Run("full data", func(t *testing.T) {
+				dir := t.TempDir()
+
+				if !agentMode {
+					require.NoError(t, os.Mkdir(filepath.Join(dir, "chunks_head"), os.ModePerm))
+					require.NoError(t, os.Mkdir(filepath.Join(dir, "01HTHFTV0ZK2KQ85DXQK9TGA7Z"), os.ModePerm))
+
+				}
+				require.NoError(t, os.Mkdir(filepath.Join(dir, "wal"), os.ModePerm))
+				require.NoError(t, os.Mkdir(filepath.Join(dir, "wal", "checkpoint.00000003"), os.ModePerm))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "lock"), []byte{1}, os.ModePerm))
+
+				require.NoError(t, deleteStorageData(agentMode, dir))
+				requireEmptyDir(t, dir)
+			})
+		})
+	}
+}
+
+func requireEmptyDir(t *testing.T, dir string) {
+	t.Helper()
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, files, "%v contains unexpected files", dir)
+}
+
+func TestAgentDeleteDataOnStart(t *testing.T) {
+	prom := exec.Command(promPath, "-test.main", "--enable-feature=agent", "--web.listen-address=0.0.0.0:0", "--config.file="+agentConfig, "--export.debug.disable-auth")
+	require.NoError(t, prom.Start())
+
+	actualExitStatus := 0
+	done := make(chan error, 1)
+
+	go func() { done <- prom.Wait() }()
+	select {
+	case err := <-done:
+		t.Logf("prometheus agent should be still running: %v", err)
+		actualExitStatus = prom.ProcessState.ExitCode()
+	case <-time.After(startupTime):
+		prom.Process.Kill()
+	}
+	require.Equal(t, 0, actualExitStatus)
+}
+
 func TestAgentSuccessfulStartup(t *testing.T) {
 	prom := exec.Command(promPath, "-test.main", "--enable-feature=agent", "--web.listen-address=0.0.0.0:0", "--config.file="+agentConfig, "--export.debug.disable-auth")
 	require.NoError(t, prom.Start())
