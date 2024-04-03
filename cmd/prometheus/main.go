@@ -43,6 +43,7 @@ import (
 	"github.com/grafana/regexp"
 	"github.com/mwitkow/go-conntrack"
 	"github.com/oklog/run"
+	"github.com/oklog/ulid"
 	"github.com/prometheus/client_golang/prometheus"
 	common_config "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
@@ -438,6 +439,11 @@ func main() {
 		return nil
 	}).Bool()
 
+	// GMP fork flags.
+	var deleteDataOnStart bool
+	a.Flag("gmp.storage.delete-data-on-start", "[GMP fork experimental flag] If true, all the storage related data (e.g. blocks, lock file, WAL, head chunks) in the --storage.tsdb.path or --storage.agent.path (depending on the mode) will be deleted, right before opening the DB. As a result, all previously collected samples will be uncoverably dropped. Use it in setups where the availability is more important than the persistence between restarts, as replaying data can take time and resources. This flag is especially useful on Kubernetes with ephemeral storage (for consistency between pod vs container restart), remote write use cases that prioritize live data and when you want to auto-recover from the OOM crashloops without changing memory limits for Prometheus (see https://github.com/prometheus/prometheus/issues/13939).").
+		Default("false").BoolVar(&deleteDataOnStart)
+
 	newExporter := gcm_export.FromFlags(a, fmt.Sprintf("prometheus/%s", version.Version))
 
 	extraArgs, err := gcm_export.ExtraArgs()
@@ -473,6 +479,16 @@ func main() {
 	localStoragePath := cfg.serverStoragePath
 	if agentMode {
 		localStoragePath = cfg.agentStoragePath
+	}
+
+	// NOTE(bwplotka): This opt-in functionality exists in our fork, relevant
+	// discussion in the upstream is here: https://github.com/prometheus/prometheus/issues/13939
+	if deleteDataOnStart {
+		level.Info(logger).Log("msg", "The --gmp.storage.delete-data-on-start flag was set, deleting relevant storage files in the storage path", "path", localStoragePath)
+		if err := deleteStorageData(agentMode, localStoragePath); err != nil {
+			fmt.Fprintln(os.Stderr, fmt.Errorf("failed to delete storage data as requested: %w", err))
+			os.Exit(1)
+		}
 	}
 
 	cfg.web.ExternalURL, err = computeExternalURL(cfg.prometheusURL, cfg.web.ListenAddress)
@@ -1686,4 +1702,36 @@ type discoveryManager interface {
 	ApplyConfig(cfg map[string]discovery.Configs) error
 	Run() error
 	SyncCh() <-chan map[string][]*targetgroup.Group
+}
+
+func deleteStorageData(agentMode bool, dataPath string) error {
+	if agentMode {
+		for _, f := range []string{"wal", "lock"} {
+			if err := os.RemoveAll(filepath.Join(dataPath, f)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	files, err := os.ReadDir(dataPath)
+	if err != nil {
+		return fmt.Errorf("can't read dir %v: %w", dataPath, err)
+	}
+	for _, f := range files {
+		switch f.Name() {
+		case "wal", "lock", "chunks_head":
+			if err := os.RemoveAll(filepath.Join(dataPath, f.Name())); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := ulid.Parse(f.Name()); err == nil {
+			// It's a TSDB block, remove.
+			if err := os.RemoveAll(filepath.Join(dataPath, f.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
