@@ -641,7 +641,7 @@ github.com/prometheus/client_golang/prometheus/testutil/promlint/validations
 # github.com/prometheus/client_model v0.5.0
 ## explicit; go 1.19
 github.com/prometheus/client_model/go
-# github.com/prometheus/common v0.47.0 => github.com/TheSpiritXIII/prometheus-common v0.45.0-gmp.1
+# github.com/prometheus/common v0.47.0 => github.com/TheSpiritXIII/prometheus-common v0.45.0-gmp.2
 ## explicit; go 1.20
 github.com/prometheus/common/config
 github.com/prometheus/common/expfmt
@@ -1419,7 +1419,7 @@ sigs.k8s.io/structured-merge-diff/v4/value
 ## explicit; go 1.12
 sigs.k8s.io/yaml
 sigs.k8s.io/yaml/goyaml.v2
-# github.com/prometheus/common => github.com/TheSpiritXIII/prometheus-common v0.45.0-gmp.1
+# github.com/prometheus/common => github.com/TheSpiritXIII/prometheus-common v0.45.0-gmp.2
 # golang.org/x/exp => golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1
 # k8s.io/klog => github.com/simonpasquier/klog-gokit v0.3.0
 # k8s.io/klog/v2 => github.com/simonpasquier/klog-gokit/v3 v3.4.0

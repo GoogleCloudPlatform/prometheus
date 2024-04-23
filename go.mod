@@ -211,7 +211,7 @@ replace (
 	// We also need these changes for secret management:
 	// - https://github.com/prometheus/common/pull/538
 	// - https://github.com/prometheus/common/pull/572
-	github.com/prometheus/common => github.com/TheSpiritXIII/prometheus-common v0.45.0-gmp.1
+	github.com/prometheus/common => github.com/TheSpiritXIII/prometheus-common v0.45.0-gmp.2
 	// See: https://github.com/prometheus/prometheus/issues/12649
 	// We can remove it after upgrading to Prometheus 2.48+.
 	golang.org/x/exp => golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1
