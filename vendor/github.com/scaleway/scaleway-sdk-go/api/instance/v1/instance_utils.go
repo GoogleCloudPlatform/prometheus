@@ -3,9 +3,10 @@ package instance
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/scaleway/scaleway-sdk-go/internal/async"
 	"sync"
 	"time"
+
+	"github.com/scaleway/scaleway-sdk-go/internal/async"
 
 	"github.com/scaleway/scaleway-sdk-go/internal/errors"
 	"github.com/scaleway/scaleway-sdk-go/scw"
@@ -92,6 +93,7 @@ func (s *API) DetachIP(req *DetachIPRequest, opts ...scw.RequestOption) (*Detach
 }
 
 // AttachVolumeRequest contains the parameters to attach a volume to a server
+// Deprecated by AttachServerVolumeRequest
 type AttachVolumeRequest struct {
 	Zone     scw.Zone `json:"-"`
 	ServerID string   `json:"-"`
@@ -99,6 +101,7 @@ type AttachVolumeRequest struct {
 }
 
 // AttachVolumeResponse contains the updated server after attaching a volume
+// Deprecated by AttachServerVolumeResponse
 type AttachVolumeResponse struct {
 	Server *Server `json:"-"`
 }
@@ -108,10 +111,19 @@ type AttachVolumeResponse struct {
 func volumesToVolumeTemplates(volumes map[string]*VolumeServer) map[string]*VolumeServerTemplate {
 	volumeTemplates := map[string]*VolumeServerTemplate{}
 	for key, volume := range volumes {
-		volumeTemplates[key] = &VolumeServerTemplate{
-			ID:   volume.ID,
-			Name: volume.Name,
+		volumeTemplate := &VolumeServerTemplate{
+			ID: &volume.ID,
 		}
+
+		if volume.Name != "" {
+			volumeTemplate.Name = &volume.Name
+		}
+
+		if volume.VolumeType == VolumeServerVolumeTypeSbsVolume {
+			volumeTemplate.VolumeType = VolumeVolumeTypeSbsVolume
+		}
+
+		volumeTemplates[key] = volumeTemplate
 	}
 	return volumeTemplates
 }
@@ -119,62 +131,46 @@ func volumesToVolumeTemplates(volumes map[string]*VolumeServer) map[string]*Volu
 // AttachVolume attaches a volume to a server
 //
 // Note: Implementation is thread-safe.
+// Deprecated by AttachServerVolume provided by instance API
 func (s *API) AttachVolume(req *AttachVolumeRequest, opts ...scw.RequestOption) (*AttachVolumeResponse, error) {
 	defer lockServer(req.Zone, req.ServerID).Unlock()
-	// get server with volumes
-	getServerResponse, err := s.GetServer(&GetServerRequest{
+	// check where the volume comes from
+	volume, err := s.getUnknownVolume(&getUnknownVolumeRequest{
 		Zone:     req.Zone,
-		ServerID: req.ServerID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	volumes := getServerResponse.Server.Volumes
-
-	newVolumes := volumesToVolumeTemplates(volumes)
-
-	// add volume to volumes list
-	// We loop through all the possible volume keys (0 to len(volumes))
-	// to find a non existing key and assign it to the requested volume.
-	// A key should always be found. However we return an error if no keys were found.
-	found := false
-	for i := 0; i <= len(volumes); i++ {
-		key := fmt.Sprintf("%d", i)
-		if _, ok := newVolumes[key]; !ok {
-			newVolumes[key] = &VolumeServerTemplate{
-				ID: req.VolumeID,
-				// name is ignored on this PATCH
-				Name: req.VolumeID,
-			}
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		return nil, fmt.Errorf("could not find key to attach volume %s", req.VolumeID)
-	}
-
-	// update server
-	updateServerResponse, err := s.updateServer(&UpdateServerRequest{
-		Zone:     req.Zone,
-		ServerID: req.ServerID,
-		Volumes:  &newVolumes,
-	})
+		VolumeID: req.VolumeID,
+	}, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return &AttachVolumeResponse{Server: updateServerResponse.Server}, nil
+	attachServerVolumeReq := &AttachServerVolumeRequest{
+		Zone:       req.Zone,
+		ServerID:   req.ServerID,
+		VolumeID:   req.VolumeID,
+		VolumeType: AttachServerVolumeRequestVolumeType(volume.Type),
+	}
+
+	resp, err := s.AttachServerVolume(attachServerVolumeReq, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AttachVolumeResponse{Server: resp.Server}, nil
 }
 
 // DetachVolumeRequest contains the parameters to detach a volume from a server
+// Deprecated by DetachServerVolumeRequest
 type DetachVolumeRequest struct {
 	Zone     scw.Zone `json:"-"`
 	VolumeID string   `json:"-"`
+	// IsBlockVolume should be set to true if volume is from block API,
+	// can be set to false if volume is from instance API,
+	// if left nil both API will be tried
+	IsBlockVolume *bool `json:"-"`
 }
 
 // DetachVolumeResponse contains the updated server after detaching a volume
+// Deprecated by DetachServerVolumeResponse
 type DetachVolumeResponse struct {
 	Server *Server `json:"-"`
 }
@@ -182,53 +178,32 @@ type DetachVolumeResponse struct {
 // DetachVolume detaches a volume from a server
 //
 // Note: Implementation is thread-safe.
+// Deprecated by DetachServerVolume provided by instance API
 func (s *API) DetachVolume(req *DetachVolumeRequest, opts ...scw.RequestOption) (*DetachVolumeResponse, error) {
-	// get volume
-	getVolumeResponse, err := s.GetVolume(&GetVolumeRequest{
+	volume, err := s.getUnknownVolume(&getUnknownVolumeRequest{
 		Zone:     req.Zone,
 		VolumeID: req.VolumeID,
-	})
+	}, opts...)
 	if err != nil {
 		return nil, err
 	}
-	if getVolumeResponse.Volume == nil {
-		return nil, errors.New("expected volume to have value in response")
-	}
-	if getVolumeResponse.Volume.Server == nil {
+
+	if volume.ServerID == nil {
 		return nil, errors.New("volume should be attached to a server")
 	}
-	serverID := getVolumeResponse.Volume.Server.ID
 
-	defer lockServer(req.Zone, serverID).Unlock()
-	// get server with volumes
-	getServerResponse, err := s.GetServer(&GetServerRequest{
+	defer lockServer(req.Zone, *volume.ServerID).Unlock()
+
+	resp, err := s.DetachServerVolume(&DetachServerVolumeRequest{
 		Zone:     req.Zone,
-		ServerID: serverID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	volumes := getServerResponse.Server.Volumes
-	// remove volume from volumes list
-	for key, volume := range volumes {
-		if volume.ID == req.VolumeID {
-			delete(volumes, key)
-		}
-	}
-
-	newVolumes := volumesToVolumeTemplates(volumes)
-
-	// update server
-	updateServerResponse, err := s.updateServer(&UpdateServerRequest{
-		Zone:     req.Zone,
-		ServerID: serverID,
-		Volumes:  &newVolumes,
-	})
+		ServerID: *volume.ServerID,
+		VolumeID: volume.ID,
+	}, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return &DetachVolumeResponse{Server: updateServerResponse.Server}, nil
+	return &DetachVolumeResponse{Server: resp.Server}, nil
 }
 
 // UnsafeSetTotalCount should not be used
@@ -283,32 +258,6 @@ func (r *ListVolumesResponse) UnsafeSetTotalCount(totalCount int) {
 // Internal usage only
 func (r *ListImagesResponse) UnsafeSetTotalCount(totalCount int) {
 	r.TotalCount = uint32(totalCount)
-}
-
-// UnsafeGetTotalCount should not be used
-// Internal usage only
-func (r *ListServersTypesResponse) UnsafeGetTotalCount() uint32 {
-	return r.TotalCount
-}
-
-// UnsafeAppend should not be used
-// Internal usage only
-func (r *ListServersTypesResponse) UnsafeAppend(res interface{}) (uint32, error) {
-	results, ok := res.(*ListServersTypesResponse)
-	if !ok {
-		return 0, errors.New("%T type cannot be appended to type %T", res, r)
-	}
-
-	if r.Servers == nil {
-		r.Servers = make(map[string]*ServerType, len(results.Servers))
-	}
-
-	for name, serverType := range results.Servers {
-		r.Servers[name] = serverType
-	}
-
-	r.TotalCount += uint32(len(results.Servers))
-	return uint32(len(results.Servers)), nil
 }
 
 func (v *NullableStringValue) UnmarshalJSON(b []byte) error {
@@ -428,4 +377,10 @@ func (s *API) WaitForMACAddress(req *WaitForMACAddressRequest, opts ...scw.Reque
 		return nil, errors.Wrap(err, "waiting for server failed")
 	}
 	return pn.(*PrivateNIC), nil
+}
+
+// UnsafeSetTotalCount should not be used
+// Internal usage only
+func (r *GetServerTypesAvailabilityResponse) UnsafeSetTotalCount(totalCount int) {
+	r.TotalCount = uint32(totalCount)
 }
