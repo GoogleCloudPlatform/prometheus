@@ -180,8 +180,8 @@ github.com/prometheus/prometheus/util/logging
 github.com/prometheus/prometheus/util/osutil
 github.com/prometheus/prometheus/util/pool
 github.com/prometheus/prometheus/util/testutil
-# github.com/stretchr/testify v1.8.4
-## explicit; go 1.20
+# github.com/stretchr/testify v1.9.0
+## explicit; go 1.17
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/require
 # github.com/xhit/go-str2duration/v2 v2.1.0
