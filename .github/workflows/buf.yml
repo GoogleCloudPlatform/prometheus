@@ -10,7 +10,7 @@ jobs:
     if: github.repository == 'prometheus/prometheus'
     steps:
       - uses: actions/checkout@v3
-      - uses: bufbuild/buf-setup-action@v1.17.0
+      - uses: bufbuild/buf-setup-action@v1.32.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
       - uses: bufbuild/buf-lint-action@v1
