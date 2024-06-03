@@ -96,7 +96,7 @@ github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/options
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/shared
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/version
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/public
-# github.com/GoogleCloudPlatform/prometheus-engine v0.12.0-rc.0
+# github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0
 ## explicit; go 1.21
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup
