@@ -247,6 +247,8 @@ type Config struct {
 
 	RemoteWriteConfigs []*RemoteWriteConfig `yaml:"remote_write,omitempty"`
 	RemoteReadConfigs  []*RemoteReadConfig  `yaml:"remote_read,omitempty"`
+
+	GoogleCloud *GoogleCloudConfig `yaml:"google_cloud,omitempty"`
 }
 
 // SetDirectory joins any relative file paths with dir.
@@ -1258,4 +1260,14 @@ func getGoGCEnv() int {
 		}
 	}
 	return DefaultRuntimeConfig.GoGC
+}
+
+type GoogleCloudConfig struct {
+	Export *GoogleCloudExportConfig `yaml:"export,omitempty"`
+}
+
+type GoogleCloudExportConfig struct {
+	Match           []string `yaml:"match,omitempty"`
+	Compression     *string  `yaml:"compression,omitempty"`
+	CredentialsFile *string  `yaml:"credentials,omitempty"`
 }
