@@ -35,6 +35,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
 	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/secrets"
 	"github.com/KimMachineGun/automemlimit/memlimit"
@@ -494,7 +495,16 @@ func main() {
 	a.Flag("gmp.storage.delete-data-on-start", "[GMP fork experimental flag] If true, all the storage related data (e.g. blocks, lock file, WAL, head chunks) in the --storage.tsdb.path or --storage.agent.path (depending on the mode) will be deleted, right before opening the DB. As a result, all previously collected samples will be uncoverably dropped. Use it in setups where the availability is more important than the persistence between restarts, as replaying data can take time and resources. This flag is especially useful on Kubernetes with ephemeral storage (for consistency between pod vs container restart), remote write use cases that prioritize live data and when you want to auto-recover from the OOM crashloops without changing memory limits for Prometheus (see https://github.com/prometheus/prometheus/issues/13939).").
 		Default("false").BoolVar(&deleteDataOnStart)
 
-	newExporter := gcm_export.FromFlags(a, fmt.Sprintf("prometheus/%s", version.Version))
+	exporterOpts := export.ExporterOpts{
+		UserAgentProduct: fmt.Sprintf("prometheus/%s", version.Version),
+	}
+	gcm_export.ExporterOptsFlags(a, &exporterOpts)
+
+	metadataOpts := gcm_export.MetadataOpts{}
+	metadataOpts.SetupFlags(a)
+
+	haOpts := gcm_export.HAOptions{}
+	haOpts.SetupFlags(a)
 
 	extraArgs, err := gcm_export.ExtraArgs()
 	if err != nil {
@@ -1000,7 +1010,7 @@ func main() {
 			name: "gcm_export",
 			reloader: func(cfg *config.Config) error {
 				// Call in closure to not call Global() before it's initialized below.
-				return gcm_export.Global().ApplyConfig(cfg)
+				return gcm_export.Global().ApplyConfig(cfg, nil)
 			},
 		},
 	}
@@ -1068,7 +1078,14 @@ func main() {
 	}
 	{
 		ctx, cancel := context.WithCancel(context.Background())
-		exporter, err := newExporter(ctx, log.With(logger, "component", "gcm_exporter"), prometheus.DefaultRegisterer)
+		exporterLogger := log.With(logger, "component", "gcm_exporter")
+		metadataOpts.ExtractMetadata(logger, &exporterOpts)
+		lease, err := haOpts.NewLease(exporterLogger, prometheus.DefaultRegisterer)
+		if err != nil {
+			_ = level.Error(exporterLogger).Log("msg", "Unable to setup Cloud Monitoring Exporter lease", "err", err)
+			os.Exit(1)
+		}
+		exporter, err := export.New(ctx, exporterLogger, prometheus.DefaultRegisterer, exporterOpts, lease)
 		if err != nil {
 			level.Error(logger).Log("msg", "Unable to init Google Cloud Monitoring exporter", "err", err)
 			os.Exit(2)
@@ -1080,7 +1097,7 @@ func main() {
 
 		g.Add(
 			func() error {
-				return gcm_export.Global().Run(ctx)
+				return gcm_export.Global().Run()
 			},
 			func(err error) {
 				cancel()

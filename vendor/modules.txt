@@ -100,8 +100,8 @@ github.com/Code-Hex/go-generics-cache/policy/lfu
 github.com/Code-Hex/go-generics-cache/policy/lru
 github.com/Code-Hex/go-generics-cache/policy/mru
 github.com/Code-Hex/go-generics-cache/policy/simple
-# github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.2
-## explicit; go 1.21
+# github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240703164640-7da8e19b470f
+## explicit; go 1.22.3
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/lease
@@ -1163,8 +1163,8 @@ gopkg.in/yaml.v2
 gopkg.in/yaml.v3
 # gotest.tools/v3 v3.0.3
 ## explicit; go 1.11
-# k8s.io/api v0.29.3
-## explicit; go 1.21
+# k8s.io/api v0.30.0
+## explicit; go 1.22.0
 k8s.io/api/admissionregistration/v1
 k8s.io/api/admissionregistration/v1alpha1
 k8s.io/api/admissionregistration/v1beta1
@@ -1217,8 +1217,8 @@ k8s.io/api/scheduling/v1beta1
 k8s.io/api/storage/v1
 k8s.io/api/storage/v1alpha1
 k8s.io/api/storage/v1beta1
-# k8s.io/apimachinery v0.29.3
-## explicit; go 1.21
+# k8s.io/apimachinery v0.30.2
+## explicit; go 1.22.0
 k8s.io/apimachinery/pkg/api/equality
 k8s.io/apimachinery/pkg/api/errors
 k8s.io/apimachinery/pkg/api/meta
