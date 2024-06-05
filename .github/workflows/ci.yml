@@ -61,17 +61,18 @@ jobs:
           go test $TestTargets -vet=off -v
         shell: powershell
 
-  test_golang_oldest:
-    name: Go tests with previous Go version
-    runs-on: ubuntu-latest
-    # The go verson in this image should be N-1 wrt test_go.
-    container:
-      image: quay.io/prometheus/golang-builder:1.21-base
-    steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-      - run: make build
-      - run: go test ./tsdb/...
-      - run: go test ./tsdb/ -test.tsdb-isolation=false
+  # Commented out because GMP doesn't support Golang 1.21 and 1.23 does not exist.
+  # test_golang_oldest:
+  #   name: Go tests with previous Go version
+  #   runs-on: ubuntu-latest
+  #   # The go verson in this image should be N-1 wrt test_go.
+  #   container:
+  #     image: quay.io/prometheus/golang-builder:1.21-base
+  #   steps:
+  #     - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+  #     - run: make build
+  #     - run: go test ./tsdb/...
+  #     - run: go test ./tsdb/ -test.tsdb-isolation=false
 
   test_mixins:
     name: Mixins tests
