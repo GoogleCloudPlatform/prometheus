@@ -30,8 +30,6 @@ import (
 	"testing"
 	"time"
 
-	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
-	gcm_exportsetup "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	prom_testutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -53,10 +51,6 @@ import (
 	"github.com/prometheus/prometheus/tsdb/tsdbutil"
 	"github.com/prometheus/prometheus/tsdb/wlog"
 )
-
-func init() {
-	gcm_exportsetup.SetGlobal(gcm_export.NopExporter())
-}
 
 func newTestHead(t testing.TB, chunkRange int64, compressWAL, oooEnabled bool) (*Head, *wlog.WL) {
 	dir := t.TempDir()

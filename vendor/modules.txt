@@ -93,8 +93,8 @@ github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/options
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/shared
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/internal/version
 github.com/AzureAD/microsoft-authentication-library-for-go/apps/public
-# github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.2
-## explicit; go 1.21
+# github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240806153622-8212dd14b922
+## explicit; go 1.22.3
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/lease
@@ -1081,8 +1081,8 @@ gopkg.in/yaml.v2
 gopkg.in/yaml.v3
 # gotest.tools/v3 v3.0.3
 ## explicit; go 1.11
-# k8s.io/api v0.29.3
-## explicit; go 1.21
+# k8s.io/api v0.30.0
+## explicit; go 1.22.0
 k8s.io/api/admissionregistration/v1
 k8s.io/api/admissionregistration/v1alpha1
 k8s.io/api/admissionregistration/v1beta1
@@ -1135,8 +1135,8 @@ k8s.io/api/scheduling/v1beta1
 k8s.io/api/storage/v1
 k8s.io/api/storage/v1alpha1
 k8s.io/api/storage/v1beta1
-# k8s.io/apimachinery v0.29.3
-## explicit; go 1.21
+# k8s.io/apimachinery v0.30.2
+## explicit; go 1.22.0
 k8s.io/apimachinery/pkg/api/equality
 k8s.io/apimachinery/pkg/api/errors
 k8s.io/apimachinery/pkg/api/meta
@@ -1380,8 +1380,8 @@ k8s.io/klog
 # k8s.io/klog/v2 v2.120.1 => github.com/simonpasquier/klog-gokit/v3 v3.4.0
 ## explicit; go 1.17
 k8s.io/klog/v2
-# k8s.io/kube-openapi v0.0.0-20231010175941-2dd684a91f00
-## explicit; go 1.19
+# k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340
+## explicit; go 1.20
 k8s.io/kube-openapi/pkg/cached
 k8s.io/kube-openapi/pkg/common
 k8s.io/kube-openapi/pkg/handler3
