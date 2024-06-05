@@ -69,6 +69,7 @@ import (
 	"github.com/prometheus/prometheus/notifier"
 	_ "github.com/prometheus/prometheus/plugins" // Register plugins.
 	"github.com/prometheus/prometheus/promql"
+	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/prometheus/prometheus/rules"
 	"github.com/prometheus/prometheus/scrape"
 	"github.com/prometheus/prometheus/storage"
@@ -876,8 +877,34 @@ func main() {
 		}, {
 			name: "gcm_export",
 			reloader: func(cfg *config.Config) error {
+				// Don't modify defaults. Copy defaults and modify based on config.
+				exporterOpts := opts.ExporterOpts
+				if cfg.GoogleCloud != nil && cfg.GoogleCloud.Export != nil {
+					exportConfig := cfg.GoogleCloud.Export
+					if exportConfig.Compression != nil {
+						exporterOpts.Compression = *exportConfig.Compression
+					}
+					if exportConfig.Match != nil {
+						var selectors []labels.Selector
+						for _, match := range exportConfig.Match {
+							selector, err := parser.ParseMetricSelector(match)
+							if err != nil {
+								return fmt.Errorf("invalid metric matcher %q: %w", match, err)
+							}
+							selectors = append(selectors, selector)
+						}
+						exporterOpts.Matchers = selectors
+					}
+					if exportConfig.CredentialsFile != nil {
+						exporterOpts.CredentialsFile = *exportConfig.CredentialsFile
+					}
+
+					if err := exporterOpts.Validate(); err != nil {
+						return fmt.Errorf("unable to validate Google Cloud fields: %w", err)
+					}
+				}
 				// Call in closure to not call Global() before it's initialized below.
-				return gcm_export.Global().ApplyConfig(cfg, &opts.ExporterOpts)
+				return gcm_export.Global().ApplyConfig(cfg, &exporterOpts)
 			},
 		},
 	}
