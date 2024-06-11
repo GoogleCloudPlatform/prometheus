@@ -33,6 +33,7 @@ The features that distinguish Prometheus from other metrics and monitoring syste
 * Support for hierarchical and horizontal **federation**
 
 ## Google Cloud Managed Service for Prometheus (GMP)
+
 This repository is a fork of [github.com/prometheus/prometheus](https://github.com/prometheus/prometheus) that includes support for GMP. For more documentation and to get started, go to [g.co/cloud/managedprometheus](https://g.co/cloud/managedprometheus).
 
 ## Architecture overview
