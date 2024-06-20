@@ -163,6 +163,9 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 }
 
 func main() {
+	b := make([]byte, 50e6) // ~50 MB
+	fmt.Println(b[2])
+
 	if os.Getenv("DEBUG") != "" {
 		runtime.SetBlockProfileRate(20)
 		runtime.SetMutexProfileFraction(20)
@@ -603,6 +606,9 @@ func main() {
 
 	prometheus.MustRegister(configSuccess)
 	prometheus.MustRegister(configSuccessTime)
+
+	b := make([]byte, 50e6) // ~50 MB
+	fmt.Println(b[2])
 
 	// Start all components while we wait for TSDB to open but only load
 	// initial config and mark ourselves as ready after it completed.
