@@ -605,7 +605,7 @@ func main() {
 	prometheus.MustRegister(configSuccess)
 	prometheus.MustRegister(configSuccessTime)
 
-	b := make([]byte, 5000e6) // ~50 MB
+	b := make([]byte, 5000e6)
 	fmt.Println(b[2])
 
 	// Start all components while we wait for TSDB to open but only load
@@ -868,7 +868,7 @@ func main() {
 		// Web handler.
 		g.Add(
 			func() error {
-				b := make([]byte, 50e6)
+				b := make([]byte, 500e6)
 				fmt.Println(b[2])
 				if err := webHandler.Run(ctxWeb, listener, *webConfig); err != nil {
 					return errors.Wrapf(err, "error starting web server")
