@@ -163,8 +163,6 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 }
 
 func main() {
-	b := make([]byte, 50e6) // ~50 MB
-	fmt.Println(b[2])
 
 	if os.Getenv("DEBUG") != "" {
 		runtime.SetBlockProfileRate(20)
@@ -870,6 +868,8 @@ func main() {
 		// Web handler.
 		g.Add(
 			func() error {
+				b := make([]byte, 50e6)
+				fmt.Println(b[2])
 				if err := webHandler.Run(ctxWeb, listener, *webConfig); err != nil {
 					return errors.Wrapf(err, "error starting web server")
 				}
