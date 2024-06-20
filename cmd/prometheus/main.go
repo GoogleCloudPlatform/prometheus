@@ -605,7 +605,7 @@ func main() {
 	prometheus.MustRegister(configSuccess)
 	prometheus.MustRegister(configSuccessTime)
 
-	b := make([]byte, 5000e6)
+	b := make([]byte, 50e6)
 	fmt.Println(b[2])
 
 	// Start all components while we wait for TSDB to open but only load
@@ -675,6 +675,8 @@ func main() {
 	{
 		// Scrape discovery manager.
 		g.Add(
+			b := make([]byte, 50e6)
+			fmt.Println(b[2])
 			func() error {
 				err := discoveryManagerScrape.Run()
 				level.Info(logger).Log("msg", "Scrape discovery manager stopped")
@@ -692,6 +694,8 @@ func main() {
 			func() error {
 				err := discoveryManagerNotify.Run()
 				level.Info(logger).Log("msg", "Notify discovery manager stopped")
+				b := make([]byte, 50e6)
+				fmt.Println(b[2])
 				return err
 			},
 			func(err error) {
@@ -709,7 +713,8 @@ func main() {
 				// It depends on the config being in sync with the discovery manager so
 				// we wait until the config is fully loaded.
 				<-reloadReady.C
-
+				b := make([]byte, 50e6)
+				fmt.Println(b[2])
 				err := scrapeManager.Run(discoveryManagerScrape.SyncCh())
 				level.Info(logger).Log("msg", "Scrape manager stopped")
 				return err
@@ -735,6 +740,8 @@ func main() {
 				<-reloadReady.C
 
 				for {
+					b := make([]byte, 50e6)
+					fmt.Println(b[2])
 					select {
 					case <-hup:
 						if err := reloadConfig(cfg.configFile, cfg.enableExpandExternalLabels, logger, noStepSubqueryInterval, reloaders...); err != nil {
@@ -765,6 +772,8 @@ func main() {
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
+				b := make([]byte, 50e6)
+				fmt.Println(b[2])
 				select {
 				case <-dbOpen:
 				// In case a shutdown is initiated before the dbOpen is released
@@ -808,6 +817,8 @@ func main() {
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
+				b := make([]byte, 50e6)
+				fmt.Println(b[2])
 				level.Info(logger).Log("msg", "Starting TSDB ...")
 				if cfg.tsdb.WALSegmentSize != 0 {
 					if cfg.tsdb.WALSegmentSize < 10*1024*1024 || cfg.tsdb.WALSegmentSize > 256*1024*1024 {
