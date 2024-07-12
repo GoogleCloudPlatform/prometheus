@@ -28,6 +28,7 @@ RUN CGO_ENABLED=1 GOEXPERIMENT=boringcrypto go build \
     -tags boring,builtinassets -mod=vendor \
     -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
     -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
+    -pgo=config/profile.pb \
     ./cmd/prometheus
 
 # Configure distroless base image like the upstream Prometheus image.
