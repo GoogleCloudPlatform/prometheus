@@ -100,7 +100,7 @@ github.com/Code-Hex/go-generics-cache/policy/lfu
 github.com/Code-Hex/go-generics-cache/policy/lru
 github.com/Code-Hex/go-generics-cache/policy/mru
 github.com/Code-Hex/go-generics-cache/policy/simple
-# github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240703164640-7da8e19b470f
+# github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240722173748-ae6e9ca1ae1a
 ## explicit; go 1.22.3
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export
 github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup

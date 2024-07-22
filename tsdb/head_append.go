@@ -96,7 +96,7 @@ func (a *initAppender) AppendCTZeroSample(ref storage.SeriesRef, lset labels.Lab
 	}
 
 	a.head.initTime(t)
-	a.app = a.head.appender()
+	a.app = a.head.appender(a.metadataFunc)
 
 	return a.app.AppendCTZeroSample(ref, lset, t, ct)
 }

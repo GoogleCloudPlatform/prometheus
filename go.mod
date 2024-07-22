@@ -8,7 +8,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5 v5.7.0
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v4 v4.3.0
 	github.com/Code-Hex/go-generics-cache v1.5.1
-	github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240703164640-7da8e19b470f
+	github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240722173748-ae6e9ca1ae1a
 	github.com/KimMachineGun/automemlimit v0.6.1
 	github.com/alecthomas/kingpin/v2 v2.4.0
 	github.com/alecthomas/units v0.0.0-20231202071711-9a357b53e9c9

@@ -61,8 +61,8 @@ github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym
 github.com/Code-Hex/go-generics-cache v1.5.1 h1:6vhZGc5M7Y/YD8cIUcY8kcuQLB4cHR7U+0KMqAA0KcU=
 github.com/Code-Hex/go-generics-cache v1.5.1/go.mod h1:qxcC9kRVrct9rHeiYpFWSoW1vxyillCVzX13KZG8dl4=
 github.com/DataDog/datadog-go v3.2.0+incompatible/go.mod h1:LButxg5PwREeZtORoXG3tL4fMGNddJ+vMq1mwgfaqoQ=
-github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240703164640-7da8e19b470f h1:+m5re/1j3XWOaeZWfiyeCekyw9gdrSrH1w9tJqvHe+4=
-github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240703164640-7da8e19b470f/go.mod h1:sBKOjuqiJ2fHSTQj/91Z1SUqO2IZrhrBc/VvS7gYZU0=
+github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240722173748-ae6e9ca1ae1a h1:teTnyindbSSxPNhKNBUcTk25FEWE2go7WMk5OXBhTVY=
+github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20240722173748-ae6e9ca1ae1a/go.mod h1:3egSbrdjc6D06+fk6Gx+aKM3y1DD+QEtAXt3GG3BHXM=
 github.com/KimMachineGun/automemlimit v0.6.1 h1:ILa9j1onAAMadBsyyUJv5cack8Y1WT26yLj/V+ulKp8=
 github.com/KimMachineGun/automemlimit v0.6.1/go.mod h1:T7xYht7B8r6AG/AqFcUdc7fzd2bIdBKmepfP2S1svPY=
 github.com/Knetic/govaluate v3.0.1-0.20171022003610-9aa49832a739+incompatible/go.mod h1:r7JcOSlj0wfOMncg0iLm8Leh48TZaKVeNIfJntJ2wa0=
