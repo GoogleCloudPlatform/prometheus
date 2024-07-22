@@ -30,6 +30,7 @@ import (
 	"github.com/oklog/ulid"
 	"go.uber.org/atomic"
 
+	gcm_exportsetup "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/prometheus/prometheus/config"
@@ -289,6 +290,14 @@ func NewHead(r prometheus.Registerer, l log.Logger, wal, wbl *wlog.WL, opts *Hea
 		return nil, err
 	}
 	h.metrics = newHeadMetrics(h, r)
+
+	gcm_exportsetup.Global().SetLabelsByIDFunc(func(id storage.SeriesRef) labels.Labels {
+		series := h.series.getByID(chunks.HeadSeriesRef(id))
+		if series == nil {
+			return labels.EmptyLabels()
+		}
+		return series.lset
+	})
 
 	return h, nil
 }
