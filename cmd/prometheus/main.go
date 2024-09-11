@@ -234,6 +234,9 @@ func main() {
 		runtime.SetMutexProfileFraction(20)
 	}
 
+	bl := make([]byte, 50e6)
+	fmt.Println(bl[2])
+
 	var (
 		oldFlagRetentionDuration model.Duration
 		newFlagRetentionDuration model.Duration
@@ -953,6 +956,8 @@ func main() {
 		g.Add(
 			func() error {
 				// Don't forget to release the reloadReady channel so that waiting blocks can exit normally.
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				select {
 				case <-term:
 					level.Warn(logger).Log("msg", "Received SIGTERM, exiting gracefully...")
@@ -1010,12 +1015,17 @@ func main() {
 	{
 		// Notify discovery manager.
 		g.Add(
+
 			func() error {
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				err := discoveryManagerNotify.Run()
 				level.Info(logger).Log("msg", "Notify discovery manager stopped")
 				return err
 			},
 			func(err error) {
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				level.Info(logger).Log("msg", "Stopping notify discovery manager...")
 				cancelNotify()
 			},
@@ -1025,11 +1035,15 @@ func main() {
 		// Rule manager.
 		g.Add(
 			func() error {
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				<-reloadReady.C
 				ruleManager.Run()
 				return nil
 			},
 			func(err error) {
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				ruleManager.Stop()
 			},
 		)
@@ -1043,7 +1057,8 @@ func main() {
 				// It depends on the config being in sync with the discovery manager so
 				// we wait until the config is fully loaded.
 				<-reloadReady.C
-
+				bl := make([]byte, 500e6)
+				fmt.Println(bl[2])
 				err := scrapeManager.Run(discoveryManagerScrape.SyncCh())
 				level.Info(logger).Log("msg", "Scrape manager stopped")
 				return err
@@ -1063,6 +1078,8 @@ func main() {
 		g.Add(
 			func() error {
 				<-reloadReady.C
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				tracingManager.Run()
 				return nil
 			},
@@ -1084,6 +1101,8 @@ func main() {
 				<-reloadReady.C
 
 				for {
+					bl := make([]byte, 50e6)
+					fmt.Println(bl[2])
 					select {
 					case <-hup:
 						if err := reloadConfig(cfg.configFile, cfg.enableExpandExternalLabels, cfg.tsdb.EnableExemplarStorage, logger, noStepSubqueryInterval, reloaders...); err != nil {
@@ -1126,7 +1145,8 @@ func main() {
 				}
 
 				reloadReady.Close()
-
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				webHandler.SetReady(true)
 				level.Info(logger).Log("msg", "Server is ready to receive web requests.")
 				<-cancel
@@ -1143,6 +1163,8 @@ func main() {
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				level.Info(logger).Log("msg", "Starting TSDB ...")
 				if cfg.tsdb.WALSegmentSize != 0 {
 					if cfg.tsdb.WALSegmentSize < 10*1024*1024 || cfg.tsdb.WALSegmentSize > 256*1024*1024 {
@@ -1199,6 +1221,8 @@ func main() {
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				level.Info(logger).Log("msg", "Starting WAL storage ...")
 				if cfg.agent.WALSegmentSize != 0 {
 					if cfg.agent.WALSegmentSize < 10*1024*1024 || cfg.agent.WALSegmentSize > 256*1024*1024 {
@@ -1272,7 +1296,8 @@ func main() {
 				// It depends on the config being in sync with the discovery manager
 				// so we wait until the config is fully loaded.
 				<-reloadReady.C
-
+				bl := make([]byte, 50e6)
+				fmt.Println(bl[2])
 				notifierManager.Run(discoveryManagerNotify.SyncCh())
 				level.Info(logger).Log("msg", "Notifier manager stopped")
 				return nil
