@@ -622,7 +622,9 @@ func TestManagerTargetsUpdates(t *testing.T) {
 
 func TestManagerSkipInitialWait(t *testing.T) {
 	opts := Options{DiscoveryReloadOnStartup: true}
-	m := NewManager(&opts, nil, nil)
+	testRegistry := prometheus.NewRegistry()
+	m, err := NewManager(&opts, nil, nil, nil, testRegistry)
+	require.NoError(t, err)
 
 	ts := make(chan map[string][]*targetgroup.Group, 1)
 	go m.Run(ts)
@@ -1445,7 +1447,7 @@ scrape_configs:
 		t,
 		scrapeManager,
 		jobName,
-		false,
+		true,
 		nil,
 	)
 }

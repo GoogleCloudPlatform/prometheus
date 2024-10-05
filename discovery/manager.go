@@ -227,7 +227,14 @@ func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
 	m.metrics.FailedConfigs.Set(float64(failedCount))
 
 	var (
-		keep         bool
+		// The updater goroutine is responsible for gathering updates to the
+		// tsets and notifying the manager but in some cases, the reload will
+		// update the tsets as well (for example: providers change during a
+		// reload and old targets need to be cleared).
+		// shouldNotify tracks whether this call to ApplyConfig updates the
+		// targets and is used to determine whether a notification to the
+		// manager needs to be triggered.
+		shouldNotify bool
 		wg           sync.WaitGroup
 		newProviders []*Provider
 	)
@@ -248,7 +255,12 @@ func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
 
 		m.targetsMtx.Lock()
 		for s := range prov.subs {
-			keep = true
+			// Since we have existing subs, and have new subs as well - we are
+			// going to be making changes to the targets map (deleting obsolete
+			// subs' targets and setting new subs' targets). Therefore,
+			// regardless of the discoverer we should notify the downstream
+			// managers so they can update the full target state.
+			shouldNotify = true
 			refTargets = m.targets[poolKey{s, prov.name}]
 			// Remove obsolete subs' targets.
 			if _, ok := prov.newSubs[s]; !ok {
@@ -277,13 +289,18 @@ func (m *Manager) ApplyConfig(cfg map[string]Configs) error {
 			m.startProvider(m.ctx, prov)
 		}
 	}
+
+	// This also helps making the downstream managers drop stale targets as soon as possible.
+	// See https://github.com/prometheus/prometheus/pull/13147 for details.
+	if !reflect.DeepEqual(m.providers, newProviders) {
+		shouldNotify = true
+	}
+
 	// Currently downstream managers expect full target state upon config reload, so we must oblige.
 	// While startProvider does pull the trigger, it may take some time to do so, therefore
 	// we pull the trigger as soon as possible so that downstream managers can populate their state.
 	// See https://github.com/prometheus/prometheus/pull/8639 for details.
-	// This also helps making the downstream managers drop stale targets as soon as possible.
-	// See https://github.com/prometheus/prometheus/pull/13147 for details.
-	if keep || len(m.providers) > 0 {
+	if shouldNotify {
 		select {
 		case m.triggerSend <- struct{}{}:
 		default:
