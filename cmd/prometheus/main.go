@@ -634,6 +634,18 @@ func main() {
 		fanoutStorage = storage.NewFanout(logger, localStorage, remoteStorage)
 	)
 
+	// NOTE(bwplotka): GMP forked logic. This essentially turns of appending for
+	// agent mode, where only GMP export is configured. This is possible as GMP
+	// export completely avoids storage and injects itself in side channel.
+	if agentMode {
+		fanoutStorage = &noopForNoRWConfigAgentStorage{
+			wrapped:                 fanoutStorage,
+			logger:                  logger,
+			anyRWEndpointConfigured: atomic.NewBool(false),
+		}
+
+	}
+
 	var (
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
@@ -781,6 +793,15 @@ func main() {
 		}, {
 			name:     "web_handler",
 			reloader: webHandler.ApplyConfig,
+		}, {
+			// NOTE(bwplotka): GMP forked logic.
+			name: "gmp_noopfornorwconfig_storage",
+			reloader: func(cfg *config.Config) error {
+				if agentMode {
+					return fanoutStorage.(*noopForNoRWConfigAgentStorage).ApplyConfig(cfg)
+				}
+				return nil
+			},
 		}, {
 			name: "query_engine",
 			reloader: func(cfg *config.Config) error {
@@ -1115,7 +1136,7 @@ func main() {
 			func() error {
 				select {
 				case <-dbOpen:
-				// In case a shutdown is initiated before the dbOpen is released
+					// In case a shutdown is initiated before the dbOpen is released
 				case <-cancel:
 					reloadReady.Close()
 					return nil
@@ -1770,3 +1791,64 @@ func deleteStorageData(agentMode bool, dataPath string) error {
 	}
 	return nil
 }
+
+type noopForNoRWConfigAgentStorage struct {
+	wrapped storage.Storage
+	logger  log.Logger
+
+	anyRWEndpointConfigured *atomic.Bool
+}
+
+func (s *noopForNoRWConfigAgentStorage) Querier(ctx context.Context, mint, maxt int64) (storage.Querier, error) {
+	return nil, agent.ErrUnsupported
+}
+
+func (s *noopForNoRWConfigAgentStorage) ChunkQuerier(ctx context.Context, mint, maxt int64) (storage.ChunkQuerier, error) {
+	return nil, agent.ErrUnsupported
+}
+
+func (s *noopForNoRWConfigAgentStorage) Appender(ctx context.Context) storage.Appender {
+	if s.anyRWEndpointConfigured.Load() {
+		return s.wrapped.Appender(ctx)
+	}
+	return nopAppender{}
+}
+
+func (s *noopForNoRWConfigAgentStorage) StartTime() (int64, error) {
+	return s.wrapped.StartTime()
+}
+
+func (s *noopForNoRWConfigAgentStorage) Close() error {
+	return s.wrapped.Close()
+}
+
+func (s *noopForNoRWConfigAgentStorage) ApplyConfig(conf *config.Config) error {
+	if len(conf.RemoteWriteConfigs) > 0 {
+		if !s.anyRWEndpointConfigured.Swap(true) {
+			level.Info(s.logger).Log("msg", "gmp forked logic: enabling agent storage appending given a new remote_write config entry")
+		}
+	} else {
+		if s.anyRWEndpointConfigured.Swap(false) {
+			level.Info(s.logger).Log("msg", "gmp forked logic: disabling agent storage appending given no remote_write was configured; no need to utilize agent WAL.")
+			// TODO(bwplotka): Remove left-over from WAL?
+		}
+	}
+	return nil
+}
+
+type nopAppender struct{}
+
+func (a nopAppender) Append(storage.SeriesRef, labels.Labels, int64, float64) (storage.SeriesRef, error) {
+	return 0, nil
+}
+func (a nopAppender) AppendExemplar(storage.SeriesRef, labels.Labels, exemplar.Exemplar) (storage.SeriesRef, error) {
+	return 0, nil
+}
+func (a nopAppender) AppendHistogram(storage.SeriesRef, labels.Labels, int64, *histogram.Histogram, *histogram.FloatHistogram) (storage.SeriesRef, error) {
+	return 0, nil
+}
+func (a nopAppender) UpdateMetadata(storage.SeriesRef, labels.Labels, metadata.Metadata) (storage.SeriesRef, error) {
+	return 0, nil
+}
+func (a nopAppender) Commit() error   { return nil }
+func (a nopAppender) Rollback() error { return nil }

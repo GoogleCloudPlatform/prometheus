@@ -621,6 +621,8 @@ Loop:
 			if ts < 0 {
 				ts = 0
 			}
+			// TODO(bwplotka): Debug, remove later.
+			level.Warn(db.logger).Log("msg", "gmp: truncating", "lowest", db.rs.LowestSentTimestamp(), "minTime", db.opts.MinWALTime, "result", ts)
 
 			// Network issues can prevent the result of getRemoteWriteTimestamp from
 			// changing. We don't want data in the WAL to grow forever, so we set a cap
@@ -629,8 +631,8 @@ Loop:
 			if maxTS := timestamp.FromTime(time.Now()) - db.opts.MaxWALTime; ts < maxTS {
 				ts = maxTS
 			}
-
-			level.Debug(db.logger).Log("msg", "truncating the WAL", "ts", ts)
+			// TODO(bwplotka): Move back to debug.
+			level.Warn(db.logger).Log("msg", "truncating the WAL", "ts", ts)
 			if err := db.truncate(ts); err != nil {
 				level.Warn(db.logger).Log("msg", "failed to truncate WAL", "err", err)
 			}
