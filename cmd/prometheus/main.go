@@ -771,6 +771,7 @@ func main() {
 	// This is passed to ruleManager.Update().
 	externalURL := cfg.web.ExternalURL.String()
 
+	gcmAgentWriteSkipper := &writeSkipperForNoRWConfig{logger: logger, noRWEndpointConfigured: atomic.NewBool(true)}
 	reloaders := []reloader{
 		{
 			name:     "db_storage",
@@ -781,6 +782,15 @@ func main() {
 		}, {
 			name:     "web_handler",
 			reloader: webHandler.ApplyConfig,
+		}, {
+			// NOTE(bwplotka): GMP forked logic.
+			name: "gmp_noopfornorwconfig_storage",
+			reloader: func(cfg *config.Config) error {
+				if agentMode {
+					return gcmAgentWriteSkipper.ApplyConfig(cfg)
+				}
+				return nil
+			},
 		}, {
 			name: "query_engine",
 			reloader: func(cfg *config.Config) error {
@@ -1115,7 +1125,7 @@ func main() {
 			func() error {
 				select {
 				case <-dbOpen:
-				// In case a shutdown is initiated before the dbOpen is released
+					// In case a shutdown is initiated before the dbOpen is released
 				case <-cancel:
 					reloadReady.Close()
 					return nil
@@ -1196,6 +1206,7 @@ func main() {
 	if agentMode {
 		// WAL storage.
 		opts := cfg.agent.ToAgentOptions()
+		opts.SkipWrite = gcmAgentWriteSkipper.noRWEndpointConfigured
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
@@ -1766,6 +1777,25 @@ func deleteStorageData(agentMode bool, dataPath string) error {
 			if err := os.RemoveAll(filepath.Join(dataPath, f.Name())); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+type writeSkipperForNoRWConfig struct {
+	logger                 log.Logger
+	noRWEndpointConfigured *atomic.Bool
+}
+
+func (s *writeSkipperForNoRWConfig) ApplyConfig(conf *config.Config) error {
+	if len(conf.RemoteWriteConfigs) > 0 {
+		if s.noRWEndpointConfigured.Swap(false) {
+			level.Info(s.logger).Log("msg", "gmp forked logic: enabling agent storage appending given a new remote_write config entry")
+		}
+	} else {
+		if !s.noRWEndpointConfigured.Swap(true) {
+			level.Info(s.logger).Log("msg", "gmp forked logic: disabling agent storage  appending given no remote_write was configured; no need to utilize agent WAL.")
+			// TODO(bwplotka): Remove left-over from WAL?
 		}
 	}
 	return nil

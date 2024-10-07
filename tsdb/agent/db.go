@@ -82,6 +82,9 @@ type Options struct {
 
 	// NoLockfile disables creation and consideration of a lock file.
 	NoLockfile bool
+
+	// NOTE: GCM forked logic, controls if we should skip WAL/WBL for GCM only mode.
+	SkipWrite *atomic.Bool
 }
 
 // DefaultOptions used for the WAL storage. They are reasonable for setups using
@@ -95,6 +98,7 @@ func DefaultOptions() *Options {
 		MinWALTime:        DefaultMinWALTime,
 		MaxWALTime:        DefaultMaxWALTime,
 		NoLockfile:        false,
+		SkipWrite:         atomic.NewBool(false),
 	}
 }
 
@@ -298,6 +302,7 @@ func Open(l log.Logger, reg prometheus.Registerer, rs *remote.Storage, dir strin
 			pendingFloatHistograms: make([]record.RefFloatHistogramSample, 0, 100),
 			pendingExamplars:       make([]record.RefExemplar, 0, 10),
 			exportExemplars:        make(map[storage.SeriesRef]record.RefExemplar, 10),
+			skipWrite:              opts.SkipWrite.Load(),
 		}
 	}
 
@@ -348,6 +353,9 @@ func validateOptions(opts *Options) *Options {
 
 	if t := int64(opts.TruncateFrequency / time.Millisecond); opts.MaxWALTime < t {
 		opts.MaxWALTime = t
+	}
+	if opts.SkipWrite == nil {
+		opts.SkipWrite = atomic.NewBool(false)
 	}
 	return opts
 }
@@ -621,6 +629,8 @@ Loop:
 			if ts < 0 {
 				ts = 0
 			}
+			// TODO(bwplotka): Debug, remove later.
+			level.Warn(db.logger).Log("msg", "gmp: truncating", "lowest", db.rs.LowestSentTimestamp(), "minTime", db.opts.MinWALTime, "result", ts)
 
 			// Network issues can prevent the result of getRemoteWriteTimestamp from
 			// changing. We don't want data in the WAL to grow forever, so we set a cap
@@ -629,8 +639,8 @@ Loop:
 			if maxTS := timestamp.FromTime(time.Now()) - db.opts.MaxWALTime; ts < maxTS {
 				ts = maxTS
 			}
-
-			level.Debug(db.logger).Log("msg", "truncating the WAL", "ts", ts)
+			// TODO(bwplotka): Move back to debug.
+			level.Warn(db.logger).Log("msg", "truncating the WAL", "ts", ts)
 			if err := db.truncate(ts); err != nil {
 				level.Warn(db.logger).Log("msg", "failed to truncate WAL", "err", err)
 			}
@@ -800,10 +810,13 @@ type appender struct {
 	// Series lock is not held on elements.
 	floatHistogramSeries []*memSeries
 
+	// NOTE: GCM forked logic
 	metadata gcm_export.MetadataFunc
-
-	// exemplars to be exported to GCM
+	// exemplars to be exported to GCM.
 	exportExemplars map[storage.SeriesRef]record.RefExemplar
+	// skipWrite ignore writes to WAL/WBL if true. This is to skip appending to
+	// WAL storage when no PRW is configured -- GCM export does not need that storage.
+	skipWrite bool
 }
 
 func (a *appender) Append(ref storage.SeriesRef, l labels.Labels, t int64, v float64) (storage.SeriesRef, error) {
@@ -831,7 +844,9 @@ func (a *appender) Append(ref storage.SeriesRef, l labels.Labels, t int64, v flo
 				Labels: l,
 			})
 
-			a.metrics.numActiveSeries.Inc()
+			if !a.skipWrite {
+				a.metrics.numActiveSeries.Inc()
+			}
 		}
 	}
 
@@ -961,7 +976,9 @@ func (a *appender) AppendHistogram(ref storage.SeriesRef, l labels.Labels, t int
 				Labels: l,
 			})
 
-			a.metrics.numActiveSeries.Inc()
+			if !a.skipWrite {
+				a.metrics.numActiveSeries.Inc()
+			}
 		}
 	}
 
@@ -1005,6 +1022,13 @@ func (a *appender) UpdateMetadata(storage.SeriesRef, labels.Labels, metadata.Met
 func (a *appender) Commit() error {
 	a.mtx.RLock()
 	defer a.mtx.RUnlock()
+
+	// NOTE: GCM forked logic.
+	gcm_exportsetup.Global().Export(a.metadata, a.pendingSamples, a.exportExemplars)
+	if a.skipWrite {
+		return a.Rollback()
+	}
+	// ----
 
 	var encoder record.Encoder
 	buf := a.bufPool.Get().([]byte)
@@ -1068,8 +1092,6 @@ func (a *appender) Commit() error {
 			a.metrics.totalOutOfOrderSamples.Inc()
 		}
 	}
-
-	gcm_exportsetup.Global().Export(a.metadata, a.pendingSamples, a.exportExemplars)
 
 	//nolint:staticcheck
 	a.bufPool.Put(buf)
