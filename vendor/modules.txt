@@ -665,11 +665,12 @@ github.com/prometheus/exporter-toolkit/web
 github.com/prometheus/procfs
 github.com/prometheus/procfs/internal/fs
 github.com/prometheus/procfs/internal/util
-# github.com/scaleway/scaleway-sdk-go v1.0.0-beta.17
+# github.com/scaleway/scaleway-sdk-go v1.0.0-beta.28
 ## explicit; go 1.17
 github.com/scaleway/scaleway-sdk-go/api/baremetal/v1
+github.com/scaleway/scaleway-sdk-go/api/block/v1alpha1
 github.com/scaleway/scaleway-sdk-go/api/instance/v1
-github.com/scaleway/scaleway-sdk-go/api/marketplace/v1
+github.com/scaleway/scaleway-sdk-go/api/marketplace/v2
 github.com/scaleway/scaleway-sdk-go/internal/async
 github.com/scaleway/scaleway-sdk-go/internal/auth
 github.com/scaleway/scaleway-sdk-go/internal/errors

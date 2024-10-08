@@ -1,4 +1,4 @@
-package instance
+package block
 
 import (
 	"time"
@@ -8,7 +8,7 @@ import (
 	"github.com/scaleway/scaleway-sdk-go/scw"
 )
 
-// WaitForImageRequest is used by WaitForImage method.
+// WaitForSnapshotRequest is used by WaitForSnapshot method.
 type WaitForSnapshotRequest struct {
 	SnapshotID    string
 	Zone          scw.Zone
@@ -27,9 +27,12 @@ func (s *API) WaitForSnapshot(req *WaitForSnapshotRequest, opts ...scw.RequestOp
 		retryInterval = *req.RetryInterval
 	}
 
-	terminalStatus := map[SnapshotState]struct{}{
-		SnapshotStateAvailable: {},
-		SnapshotStateError:     {},
+	terminalStatus := map[SnapshotStatus]struct{}{
+		SnapshotStatusAvailable: {},
+		SnapshotStatusInUse:     {},
+		SnapshotStatusError:     {},
+		SnapshotStatusLocked:    {},
+		SnapshotStatusDeleted:   {},
 	}
 
 	snapshot, err := async.WaitSync(&async.WaitSyncConfig{
@@ -42,9 +45,9 @@ func (s *API) WaitForSnapshot(req *WaitForSnapshotRequest, opts ...scw.RequestOp
 			if err != nil {
 				return nil, false, err
 			}
-			_, isTerminal := terminalStatus[res.Snapshot.State]
+			_, isTerminal := terminalStatus[res.Status]
 
-			return res.Snapshot, isTerminal, err
+			return res, isTerminal, err
 		},
 		Timeout:          timeout,
 		IntervalStrategy: async.LinearIntervalStrategy(retryInterval),
