@@ -11,9 +11,20 @@ const NormalModule = require("./NormalModule");
 const createSchemaValidation = require("./util/create-schema-validation");
 const { contextify } = require("./util/identifier");
 
+/** @typedef {import("tapable").Tap} Tap */
 /** @typedef {import("../declarations/plugins/ProgressPlugin").HandlerFunction} HandlerFunction */
 /** @typedef {import("../declarations/plugins/ProgressPlugin").ProgressPluginArgument} ProgressPluginArgument */
 /** @typedef {import("../declarations/plugins/ProgressPlugin").ProgressPluginOptions} ProgressPluginOptions */
+/** @typedef {import("./Dependency")} Dependency */
+/** @typedef {import("./Entrypoint").EntryOptions} EntryOptions */
+/** @typedef {import("./Module")} Module */
+/** @typedef {import("./logging/Logger").Logger} Logger */
+
+/**
+ * @typedef {object} CountsData
+ * @property {number} modulesCount modules count
+ * @property {number} dependenciesCount dependencies count
+ */
 
 const validate = createSchemaValidation(
 	require("../schemas/plugins/ProgressPlugin.check.js"),
@@ -23,14 +34,29 @@ const validate = createSchemaValidation(
 		baseDataPath: "options"
 	}
 );
-const median3 = (a, b, c) => {
-	return a + b + c - Math.max(a, b, c) - Math.min(a, b, c);
-};
 
+/**
+ * @param {number} a a
+ * @param {number} b b
+ * @param {number} c c
+ * @returns {number} median
+ */
+const median3 = (a, b, c) => a + b + c - Math.max(a, b, c) - Math.min(a, b, c);
+
+/**
+ * @param {boolean | null | undefined} profile need profile
+ * @param {Logger} logger logger
+ * @returns {defaultHandler} default handler
+ */
 const createDefaultHandler = (profile, logger) => {
-	/** @type {{ value: string, time: number }[]} */
+	/** @type {{ value: string | undefined, time: number }[]} */
 	const lastStateInfo = [];
 
+	/**
+	 * @param {number} percentage percentage
+	 * @param {string} msg message
+	 * @param {...string} args additional arguments
+	 */
 	const defaultHandler = (percentage, msg, ...args) => {
 		if (profile) {
 			if (percentage === 0) {
@@ -50,11 +76,12 @@ const createDefaultHandler = (profile, logger) => {
 						if (lastStateItem.value) {
 							let reportState = lastStateItem.value;
 							if (i > 0) {
-								reportState = lastStateInfo[i - 1].value + " > " + reportState;
+								reportState = `${lastStateInfo[i - 1].value} > ${reportState}`;
 							}
 							const stateMsg = `${" | ".repeat(i)}${diff} ms ${reportState}`;
 							const d = diff;
 							// This depends on timing so we ignore it for coverage
+							/* eslint-disable no-lone-blocks */
 							/* istanbul ignore next */
 							{
 								if (d > 10000) {
@@ -69,6 +96,7 @@ const createDefaultHandler = (profile, logger) => {
 									logger.debug(stateMsg);
 								}
 							}
+							/* eslint-enable no-lone-blocks */
 						}
 						if (stateItem === undefined) {
 							lastStateInfo.length = i;
@@ -95,18 +123,18 @@ const createDefaultHandler = (profile, logger) => {
 
 /**
  * @callback ReportProgress
- * @param {number} p
- * @param {...string} [args]
+ * @param {number} p percentage
+ * @param {...string} args additional arguments
  * @returns {void}
  */
 
-/** @type {WeakMap<Compiler,ReportProgress>} */
+/** @type {WeakMap<Compiler, ReportProgress | undefined>} */
 const progressReporters = new WeakMap();
 
 class ProgressPlugin {
 	/**
 	 * @param {Compiler} compiler the current compiler
-	 * @returns {ReportProgress} a progress reporter, if any
+	 * @returns {ReportProgress | undefined} a progress reporter, if any
 	 */
 	static getReporter(compiler) {
 		return progressReporters.get(compiler);
@@ -163,14 +191,14 @@ class ProgressPlugin {
 		const states = compiler.compilers.map(
 			() => /** @type {[number, ...string[]]} */ ([0])
 		);
-		compiler.compilers.forEach((compiler, idx) => {
+		for (const [idx, item] of compiler.compilers.entries()) {
 			new ProgressPlugin((p, msg, ...args) => {
 				states[idx] = [p, msg, ...args];
 				let sum = 0;
 				for (const [p] of states) sum += p;
 				handler(sum / states.length, `[${idx}] ${msg}`, ...args);
-			}).apply(compiler);
-		});
+			}).apply(item);
+		}
 	}
 
 	/**
@@ -288,6 +316,9 @@ class ProgressPlugin {
 		};
 
 		// only used when showActiveModules is set
+		/**
+		 * @param {Module} module the module
+		 */
 		const moduleBuild = module => {
 			const ident = module.identifier();
 			if (ident) {
@@ -297,11 +328,18 @@ class ProgressPlugin {
 			}
 		};
 
+		/**
+		 * @param {Dependency} entry entry dependency
+		 * @param {EntryOptions} options options object
+		 */
 		const entryAdd = (entry, options) => {
 			entriesCount++;
 			if (entriesCount < 5 || entriesCount % 10 === 0) updateThrottled();
 		};
 
+		/**
+		 * @param {Module} module the module
+		 */
 		const moduleDone = module => {
 			doneModules++;
 			if (showActiveModules) {
@@ -321,6 +359,10 @@ class ProgressPlugin {
 			if (doneModules < 50 || doneModules % 100 === 0) updateThrottled();
 		};
 
+		/**
+		 * @param {Dependency} entry entry dependency
+		 * @param {EntryOptions} options options object
+		 */
 		const entryDone = (entry, options) => {
 			doneEntries++;
 			update();
@@ -330,6 +372,7 @@ class ProgressPlugin {
 			.getCache("ProgressPlugin")
 			.getItemCache("counts", null);
 
+		/** @type {Promise<CountsData> | undefined} */
 		let cacheGetPromise;
 
 		compiler.hooks.beforeCompile.tap("ProgressPlugin", () => {
@@ -352,15 +395,17 @@ class ProgressPlugin {
 
 		compiler.hooks.afterCompile.tapPromise("ProgressPlugin", compilation => {
 			if (compilation.compiler.isChild()) return Promise.resolve();
-			return cacheGetPromise.then(async oldData => {
-				if (
-					!oldData ||
-					oldData.modulesCount !== modulesCount ||
-					oldData.dependenciesCount !== dependenciesCount
-				) {
-					await cache.storePromise({ modulesCount, dependenciesCount });
+			return /** @type {Promise<CountsData>} */ (cacheGetPromise).then(
+				async oldData => {
+					if (
+						!oldData ||
+						oldData.modulesCount !== modulesCount ||
+						oldData.dependenciesCount !== dependenciesCount
+					) {
+						await cache.storePromise({ modulesCount, dependenciesCount });
+					}
 				}
-			});
+			);
 		});
 
 		compiler.hooks.compilation.tap("ProgressPlugin", compilation => {
@@ -462,10 +507,10 @@ class ProgressPlugin {
 				afterSeal: "after seal"
 			};
 			const numberOfHooks = Object.keys(hooks).length;
-			Object.keys(hooks).forEach((name, idx) => {
-				const title = hooks[name];
+			for (const [idx, name] of Object.keys(hooks).entries()) {
+				const title = hooks[/** @type {keyof typeof hooks} */ (name)];
 				const percentage = (idx / numberOfHooks) * 0.25 + 0.7;
-				compilation.hooks[name].intercept({
+				compilation.hooks[/** @type {keyof typeof hooks} */ (name)].intercept({
 					name: "ProgressPlugin",
 					call() {
 						handler(percentage, "sealing", title);
@@ -489,7 +534,7 @@ class ProgressPlugin {
 						handler(percentage, "sealing", title, tap.name);
 					}
 				});
-			});
+			}
 		});
 		compiler.hooks.make.intercept({
 			name: "ProgressPlugin",
@@ -500,6 +545,12 @@ class ProgressPlugin {
 				handler(0.65, "building");
 			}
 		});
+		/**
+		 * @param {TODO} hook hook
+		 * @param {number} progress progress from 0 to 1
+		 * @param {string} category category
+		 * @param {string} name name
+		 */
 		const interceptHook = (hook, progress, category, name) => {
 			hook.intercept({
 				name: "ProgressPlugin",
@@ -516,6 +567,9 @@ class ProgressPlugin {
 				error() {
 					handler(progress, category, name);
 				},
+				/**
+				 * @param {Tap} tap tap
+				 */
 				tap(tap) {
 					progressReporters.set(compiler, (p, ...args) => {
 						handler(progress, category, name, tap.name, ...args);
@@ -609,5 +663,7 @@ ProgressPlugin.defaultOptions = {
 	activeModules: false,
 	entries: true
 };
+
+ProgressPlugin.createDefaultHandler = createDefaultHandler;
 
 module.exports = ProgressPlugin;

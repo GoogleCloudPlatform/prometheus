@@ -7,6 +7,7 @@
 
 const eslintScope = require("eslint-scope");
 const Referencer = require("eslint-scope/lib/referencer");
+const { SyncBailHook } = require("tapable");
 const {
 	CachedSource,
 	ConcatSource,
@@ -15,6 +16,7 @@ const {
 const ConcatenationScope = require("../ConcatenationScope");
 const { UsageState } = require("../ExportsInfo");
 const Module = require("../Module");
+const { JAVASCRIPT_MODULE_TYPE_ESM } = require("../ModuleTypeConstants");
 const RuntimeGlobals = require("../RuntimeGlobals");
 const Template = require("../Template");
 const HarmonyImportDependency = require("../dependencies/HarmonyImportDependency");
@@ -25,7 +27,9 @@ const { concatComparators } = require("../util/comparators");
 const createHash = require("../util/createHash");
 const { makePathsRelative } = require("../util/identifier");
 const makeSerializable = require("../util/makeSerializable");
+const { getAllReferences, getPathInAst } = require("../util/mergeScope");
 const propertyAccess = require("../util/propertyAccess");
+const { propertyName } = require("../util/propertyName");
 const {
 	filterRuntime,
 	intersectRuntime,
@@ -35,7 +39,9 @@ const {
 	subtractRuntimeCondition
 } = require("../util/runtime");
 
+/** @typedef {import("eslint-scope").Reference} Reference */
 /** @typedef {import("eslint-scope").Scope} Scope */
+/** @typedef {import("eslint-scope").Variable} Variable */
 /** @typedef {import("webpack-sources").Source} Source */
 /** @typedef {import("../../declarations/WebpackOptions").WebpackOptionsNormalized} WebpackOptions */
 /** @typedef {import("../ChunkGraph")} ChunkGraph */
@@ -46,33 +52,50 @@ const {
 /** @typedef {import("../DependencyTemplate").DependencyTemplateContext} DependencyTemplateContext */
 /** @typedef {import("../DependencyTemplates")} DependencyTemplates */
 /** @typedef {import("../ExportsInfo").ExportInfo} ExportInfo */
-/** @template T @typedef {import("../InitFragment")<T>} InitFragment */
+/** @typedef {import("../Module").BuildInfo} BuildInfo */
+/** @typedef {import("../Module").BuildMeta} BuildMeta */
 /** @typedef {import("../Module").CodeGenerationContext} CodeGenerationContext */
 /** @typedef {import("../Module").CodeGenerationResult} CodeGenerationResult */
 /** @typedef {import("../Module").LibIdentOptions} LibIdentOptions */
+/** @typedef {import("../Module").ReadOnlyRuntimeRequirements} ReadOnlyRuntimeRequirements */
+/** @typedef {import("../Module").SourceTypes} SourceTypes */
 /** @typedef {import("../ModuleGraph")} ModuleGraph */
 /** @typedef {import("../ModuleGraphConnection")} ModuleGraphConnection */
 /** @typedef {import("../ModuleGraphConnection").ConnectionState} ConnectionState */
+/** @typedef {import("../ModuleParseError")} ModuleParseError */
 /** @typedef {import("../RequestShortener")} RequestShortener */
 /** @typedef {import("../ResolverFactory").ResolverWithOptions} ResolverWithOptions */
 /** @typedef {import("../RuntimeTemplate")} RuntimeTemplate */
 /** @typedef {import("../WebpackError")} WebpackError */
 /** @typedef {import("../javascript/JavascriptModulesPlugin").ChunkRenderContext} ChunkRenderContext */
+/** @typedef {import("../javascript/JavascriptParser").Program} Program */
+/** @typedef {import("../javascript/JavascriptParser").Range} Range */
+/** @typedef {import("../serialization/ObjectMiddleware").ObjectDeserializerContext} ObjectDeserializerContext */
 /** @typedef {import("../util/Hash")} Hash */
 /** @typedef {typeof import("../util/Hash")} HashConstructor */
 /** @typedef {import("../util/fs").InputFileSystem} InputFileSystem */
 /** @typedef {import("../util/runtime").RuntimeSpec} RuntimeSpec */
 
+/**
+ * @template T
+ * @typedef {import("../InitFragment")<T>} InitFragment
+ */
+
+/**
+ * @template T
+ * @typedef {import("../util/comparators").Comparator<T>} Comparator
+ */
+
 // fix eslint-scope to support class properties correctly
 // cspell:word Referencer
-const ReferencerClass = Referencer;
+const ReferencerClass = /** @type {any} */ (Referencer);
 if (!ReferencerClass.prototype.PropertyDefinition) {
 	ReferencerClass.prototype.PropertyDefinition =
 		ReferencerClass.prototype.Property;
 }
 
 /**
- * @typedef {Object} ReexportInfo
+ * @typedef {object} ReexportInfo
  * @property {Module} module
  * @property {string[]} export
  */
@@ -80,7 +103,7 @@ if (!ReferencerClass.prototype.PropertyDefinition) {
 /** @typedef {RawBinding | SymbolBinding} Binding */
 
 /**
- * @typedef {Object} RawBinding
+ * @typedef {object} RawBinding
  * @property {ModuleInfo} info
  * @property {string} rawName
  * @property {string=} comment
@@ -89,7 +112,7 @@ if (!ReferencerClass.prototype.PropertyDefinition) {
  */
 
 /**
- * @typedef {Object} SymbolBinding
+ * @typedef {object} SymbolBinding
  * @property {ConcatenatedModuleInfo} info
  * @property {string} name
  * @property {string=} comment
@@ -101,51 +124,53 @@ if (!ReferencerClass.prototype.PropertyDefinition) {
 /** @typedef {ConcatenatedModuleInfo | ExternalModuleInfo | ReferenceToModuleInfo } ModuleInfoOrReference */
 
 /**
- * @typedef {Object} ConcatenatedModuleInfo
+ * @typedef {object} ConcatenatedModuleInfo
  * @property {"concatenated"} type
  * @property {Module} module
  * @property {number} index
- * @property {Object} ast
- * @property {Source} internalSource
+ * @property {Program | undefined} ast
+ * @property {Source | undefined} internalSource
  * @property {ReplaceSource} source
  * @property {InitFragment<ChunkRenderContext>[]=} chunkInitFragments
- * @property {Iterable<string>} runtimeRequirements
- * @property {Scope} globalScope
- * @property {Scope} moduleScope
+ * @property {ReadOnlyRuntimeRequirements | undefined} runtimeRequirements
+ * @property {Scope | undefined} globalScope
+ * @property {Scope | undefined} moduleScope
  * @property {Map<string, string>} internalNames
- * @property {Map<string, string>} exportMap
- * @property {Map<string, string>} rawExportMap
+ * @property {Map<string, string> | undefined} exportMap
+ * @property {Map<string, string> | undefined} rawExportMap
  * @property {string=} namespaceExportSymbol
- * @property {string} namespaceObjectName
+ * @property {string | undefined} namespaceObjectName
  * @property {boolean} interopNamespaceObjectUsed
- * @property {string} interopNamespaceObjectName
+ * @property {string | undefined} interopNamespaceObjectName
  * @property {boolean} interopNamespaceObject2Used
- * @property {string} interopNamespaceObject2Name
+ * @property {string | undefined} interopNamespaceObject2Name
  * @property {boolean} interopDefaultAccessUsed
- * @property {string} interopDefaultAccessName
+ * @property {string | undefined} interopDefaultAccessName
  */
 
 /**
- * @typedef {Object} ExternalModuleInfo
+ * @typedef {object} ExternalModuleInfo
  * @property {"external"} type
  * @property {Module} module
  * @property {RuntimeSpec | boolean} runtimeCondition
  * @property {number} index
- * @property {string} name
+ * @property {string | undefined} name
  * @property {boolean} interopNamespaceObjectUsed
- * @property {string} interopNamespaceObjectName
+ * @property {string | undefined} interopNamespaceObjectName
  * @property {boolean} interopNamespaceObject2Used
- * @property {string} interopNamespaceObject2Name
+ * @property {string | undefined} interopNamespaceObject2Name
  * @property {boolean} interopDefaultAccessUsed
- * @property {string} interopDefaultAccessName
+ * @property {string | undefined} interopDefaultAccessName
  */
 
 /**
- * @typedef {Object} ReferenceToModuleInfo
+ * @typedef {object} ReferenceToModuleInfo
  * @property {"reference"} type
  * @property {RuntimeSpec | boolean} runtimeCondition
  * @property {ConcatenatedModuleInfo | ExternalModuleInfo} target
  */
+
+/** @typedef {Set<string>} UsedNames */
 
 const RESERVED_NAMES = new Set(
 	[
@@ -185,15 +210,30 @@ const RESERVED_NAMES = new Set(
 		.split(",")
 );
 
+/**
+ * @template T
+ * @param {string} property property
+ * @param {function(T[keyof T], T[keyof T]): 0 | 1 | -1} comparator comparator
+ * @returns {Comparator<T>} comparator
+ */
 const createComparator = (property, comparator) => (a, b) =>
-	comparator(a[property], b[property]);
+	comparator(
+		a[/** @type {keyof T} */ (property)],
+		b[/** @type {keyof T} */ (property)]
+	);
+
+/**
+ * @param {number} a a
+ * @param {number} b b
+ * @returns {0 | 1 | -1} result
+ */
 const compareNumbers = (a, b) => {
-	if (isNaN(a)) {
-		if (!isNaN(b)) {
+	if (Number.isNaN(a)) {
+		if (!Number.isNaN(b)) {
 			return 1;
 		}
 	} else {
-		if (isNaN(b)) {
+		if (Number.isNaN(b)) {
 			return -1;
 		}
 		if (a !== b) {
@@ -205,6 +245,10 @@ const compareNumbers = (a, b) => {
 const bySourceOrder = createComparator("sourceOrder", compareNumbers);
 const byRangeStart = createComparator("rangeStart", compareNumbers);
 
+/**
+ * @param {Iterable<string>} iterable iterable object
+ * @returns {string} joined iterable object
+ */
 const joinIterableWithComma = iterable => {
 	// This is more performant than Array.from().join(", ")
 	// as it doesn't create an array
@@ -222,7 +266,7 @@ const joinIterableWithComma = iterable => {
 };
 
 /**
- * @typedef {Object} ConcatenationEntry
+ * @typedef {object} ConcatenationEntry
  * @property {"concatenated" | "external"} type
  * @property {Module} module
  * @property {RuntimeSpec | boolean} runtimeCondition
@@ -238,7 +282,7 @@ const joinIterableWithComma = iterable => {
  * @param {RuntimeTemplate} runtimeTemplate the runtime template
  * @param {Set<ConcatenatedModuleInfo>} neededNamespaceObjects modules for which a namespace object should be generated
  * @param {boolean} asCall asCall
- * @param {boolean} strictHarmonyModule strictHarmonyModule
+ * @param {boolean | undefined} strictHarmonyModule strictHarmonyModule
  * @param {boolean | undefined} asiSafe asiSafe
  * @param {Set<ExportInfo>} alreadyVisited alreadyVisited
  * @returns {Binding} the final variable
@@ -267,7 +311,7 @@ const getFinalBinding = (
 				info.interopNamespaceObject2Used = true;
 				return {
 					info,
-					rawName: info.interopNamespaceObject2Name,
+					rawName: /** @type {string} */ (info.interopNamespaceObject2Name),
 					ids: exportName,
 					exportName
 				};
@@ -275,7 +319,7 @@ const getFinalBinding = (
 				info.interopNamespaceObjectUsed = true;
 				return {
 					info,
-					rawName: info.interopNamespaceObjectName,
+					rawName: /** @type {string} */ (info.interopNamespaceObjectName),
 					ids: exportName,
 					exportName
 				};
@@ -333,10 +377,10 @@ const getFinalBinding = (
 						const defaultExport = asCall
 							? `${info.interopDefaultAccessName}()`
 							: asiSafe
-							? `(${info.interopDefaultAccessName}())`
-							: asiSafe === false
-							? `;(${info.interopDefaultAccessName}())`
-							: `${info.interopDefaultAccessName}.a`;
+								? `(${info.interopDefaultAccessName}())`
+								: asiSafe === false
+									? `;(${info.interopDefaultAccessName}())`
+									: `${info.interopDefaultAccessName}.a`;
 						return {
 							info,
 							rawName: defaultExport,
@@ -363,12 +407,21 @@ const getFinalBinding = (
 				neededNamespaceObjects.add(info);
 				return {
 					info,
-					rawName: info.namespaceObjectName,
+					rawName:
+						/** @type {NonNullable<ConcatenatedModuleInfo["namespaceObjectName"]>} */
+						(info.namespaceObjectName),
 					ids: exportName,
 					exportName
 				};
 			case "external":
-				return { info, rawName: info.name, ids: exportName, exportName };
+				return {
+					info,
+					rawName:
+						/** @type {NonNullable<ExternalModuleInfo["name"]>} */
+						(info.name),
+					ids: exportName,
+					exportName
+				};
 		}
 	}
 	const exportsInfo = moduleGraph.getExportsInfo(info.module);
@@ -390,7 +443,7 @@ const getFinalBinding = (
 				neededNamespaceObjects.add(info);
 				return {
 					info,
-					rawName: info.namespaceObjectName,
+					rawName: /** @type {string} */ (info.namespaceObjectName),
 					ids: exportName,
 					exportName
 				};
@@ -442,7 +495,7 @@ const getFinalBinding = (
 				const refInfo = moduleToInfoMap.get(reexport.module);
 				return getFinalBinding(
 					moduleGraph,
-					refInfo,
+					/** @type {ModuleInfo} */ (refInfo),
 					reexport.export
 						? [...reexport.export, ...exportName.slice(1)]
 						: exportName.slice(1),
@@ -452,7 +505,8 @@ const getFinalBinding = (
 					runtimeTemplate,
 					neededNamespaceObjects,
 					asCall,
-					info.module.buildMeta.strictHarmonyModule,
+					/** @type {BuildMeta} */
+					(info.module.buildMeta).strictHarmonyModule,
 					asiSafe,
 					alreadyVisited
 				);
@@ -463,7 +517,7 @@ const getFinalBinding = (
 				);
 				return {
 					info,
-					rawName: info.namespaceObjectName,
+					rawName: /** @type {string} */ (info.namespaceObjectName),
 					ids: usedName,
 					exportName
 				};
@@ -505,8 +559,8 @@ const getFinalBinding = (
  * @param {RuntimeTemplate} runtimeTemplate the runtime template
  * @param {Set<ConcatenatedModuleInfo>} neededNamespaceObjects modules for which a namespace object should be generated
  * @param {boolean} asCall asCall
- * @param {boolean} callContext callContext
- * @param {boolean} strictHarmonyModule strictHarmonyModule
+ * @param {boolean | undefined} callContext callContext
+ * @param {boolean | undefined} strictHarmonyModule strictHarmonyModule
  * @param {boolean | undefined} asiSafe asiSafe
  * @returns {string} the final name
  */
@@ -566,13 +620,19 @@ const getFinalName = (
 			return asiSafe
 				? `(0,${reference})`
 				: asiSafe === false
-				? `;(0,${reference})`
-				: `/*#__PURE__*/Object(${reference})`;
+					? `;(0,${reference})`
+					: `/*#__PURE__*/Object(${reference})`;
 		}
 		return reference;
 	}
 };
 
+/**
+ * @param {Scope | null} s scope
+ * @param {UsedNames} nameSet name set
+ * @param {TODO} scopeSet1 scope set 1
+ * @param {TODO} scopeSet2 scope set 2
+ */
 const addScopeSymbols = (s, nameSet, scopeSet1, scopeSet2) => {
 	let scope = s;
 	while (scope) {
@@ -586,71 +646,23 @@ const addScopeSymbols = (s, nameSet, scopeSet1, scopeSet2) => {
 	}
 };
 
-const getAllReferences = variable => {
-	let set = variable.references;
-	// Look for inner scope variables too (like in class Foo { t() { Foo } })
-	const identifiers = new Set(variable.identifiers);
-	for (const scope of variable.scope.childScopes) {
-		for (const innerVar of scope.variables) {
-			if (innerVar.identifiers.some(id => identifiers.has(id))) {
-				set = set.concat(innerVar.references);
-				break;
-			}
-		}
-	}
-	return set;
-};
-
-const getPathInAst = (ast, node) => {
-	if (ast === node) {
-		return [];
-	}
-
-	const nr = node.range;
-
-	const enterNode = n => {
-		if (!n) return undefined;
-		const r = n.range;
-		if (r) {
-			if (r[0] <= nr[0] && r[1] >= nr[1]) {
-				const path = getPathInAst(n, node);
-				if (path) {
-					path.push(n);
-					return path;
-				}
-			}
-		}
-		return undefined;
-	};
-
-	if (Array.isArray(ast)) {
-		for (let i = 0; i < ast.length; i++) {
-			const enterResult = enterNode(ast[i]);
-			if (enterResult !== undefined) return enterResult;
-		}
-	} else if (ast && typeof ast === "object") {
-		const keys = Object.keys(ast);
-		for (let i = 0; i < keys.length; i++) {
-			const value = ast[keys[i]];
-			if (Array.isArray(value)) {
-				const pathResult = getPathInAst(value, node);
-				if (pathResult !== undefined) return pathResult;
-			} else if (value && typeof value === "object") {
-				const enterResult = enterNode(value);
-				if (enterResult !== undefined) return enterResult;
-			}
-		}
-	}
-};
-
 const TYPES = new Set(["javascript"]);
+
+/**
+ * @typedef {object} ConcatenateModuleHooks
+ * @property {SyncBailHook<[Record<string, string>], boolean>} exportsDefinitions
+ */
+
+/** @type {WeakMap<Compilation, ConcatenateModuleHooks>} */
+const compilationHooksMap = new WeakMap();
 
 class ConcatenatedModule extends Module {
 	/**
 	 * @param {Module} rootModule the root module of the concatenation
 	 * @param {Set<Module>} modules all modules in the concatenation (including the root module)
 	 * @param {RuntimeSpec} runtime the runtime
-	 * @param {Object=} associatedObjectForCache object for caching
+	 * @param {Compilation} compilation the compilation
+	 * @param {object=} associatedObjectForCache object for caching
 	 * @param {string | HashConstructor=} hashFunction hash function to use
 	 * @returns {ConcatenatedModule} the module
 	 */
@@ -658,6 +670,7 @@ class ConcatenatedModule extends Module {
 		rootModule,
 		modules,
 		runtime,
+		compilation,
 		associatedObjectForCache,
 		hashFunction = "md4"
 	) {
@@ -671,19 +684,36 @@ class ConcatenatedModule extends Module {
 			identifier,
 			rootModule,
 			modules,
-			runtime
+			runtime,
+			compilation
 		});
 	}
 
 	/**
-	 * @param {Object} options options
+	 * @param {Compilation} compilation the compilation
+	 * @returns {ConcatenateModuleHooks} the attached hooks
+	 */
+	static getCompilationHooks(compilation) {
+		let hooks = compilationHooksMap.get(compilation);
+		if (hooks === undefined) {
+			hooks = {
+				exportsDefinitions: new SyncBailHook(["definitions"])
+			};
+			compilationHooksMap.set(compilation, hooks);
+		}
+		return hooks;
+	}
+
+	/**
+	 * @param {object} options options
 	 * @param {string} options.identifier the identifier of the module
 	 * @param {Module=} options.rootModule the root module of the concatenation
 	 * @param {RuntimeSpec} options.runtime the selected runtime
 	 * @param {Set<Module>=} options.modules all concatenated modules
+	 * @param {Compilation} options.compilation the compilation
 	 */
-	constructor({ identifier, rootModule, modules, runtime }) {
-		super("javascript/esm", null, rootModule && rootModule.layer);
+	constructor({ identifier, rootModule, modules, runtime, compilation }) {
+		super(JAVASCRIPT_MODULE_TYPE_ESM, null, rootModule && rootModule.layer);
 
 		// Info from Factory
 		/** @type {string} */
@@ -694,6 +724,8 @@ class ConcatenatedModule extends Module {
 		this._modules = modules;
 		this._runtime = runtime;
 		this.factoryMeta = rootModule && rootModule.factoryMeta;
+		/** @type {Compilation | undefined} */
+		this.compilation = compilation;
 	}
 
 	/**
@@ -708,7 +740,7 @@ class ConcatenatedModule extends Module {
 	}
 
 	/**
-	 * @returns {Set<string>} types available (do not mutate)
+	 * @returns {SourceTypes} types available (do not mutate)
 	 */
 	getSourceTypes() {
 		return TYPES;
@@ -730,10 +762,9 @@ class ConcatenatedModule extends Module {
 	 * @returns {string} a user readable identifier of the module
 	 */
 	readableIdentifier(requestShortener) {
-		return (
-			this.rootModule.readableIdentifier(requestShortener) +
-			` + ${this._modules.size - 1} modules`
-		);
+		return `${this.rootModule.readableIdentifier(
+			requestShortener
+		)} + ${this._modules.size - 1} modules`;
 	}
 
 	/**
@@ -769,11 +800,14 @@ class ConcatenatedModule extends Module {
 	 */
 	build(options, compilation, resolver, fs, callback) {
 		const { rootModule } = this;
+		const { moduleArgument, exportsArgument } =
+			/** @type {BuildInfo} */
+			(rootModule.buildInfo);
 		this.buildInfo = {
 			strict: true,
 			cacheable: true,
-			moduleArgument: rootModule.buildInfo.moduleArgument,
-			exportsArgument: rootModule.buildInfo.exportsArgument,
+			moduleArgument,
+			exportsArgument,
 			fileDependencies: new LazySet(),
 			contextDependencies: new LazySet(),
 			missingDependencies: new LazySet(),
@@ -786,7 +820,7 @@ class ConcatenatedModule extends Module {
 
 		for (const m of this._modules) {
 			// populate cacheable
-			if (!m.buildInfo.cacheable) {
+			if (!(/** @type {BuildInfo} */ (m.buildInfo).cacheable)) {
 				this.buildInfo.cacheable = false;
 			}
 
@@ -794,7 +828,9 @@ class ConcatenatedModule extends Module {
 			for (const d of m.dependencies.filter(
 				dep =>
 					!(dep instanceof HarmonyImportDependency) ||
-					!this._modules.has(compilation.moduleGraph.getModule(dep))
+					!this._modules.has(
+						/** @type {Module} */ (compilation.moduleGraph.getModule(dep))
+					)
 			)) {
 				this.dependencies.push(d);
 			}
@@ -819,11 +855,14 @@ class ConcatenatedModule extends Module {
 				}
 			}
 
+			const { assets, assetsInfo, topLevelDeclarations } =
+				/** @type {BuildInfo} */ (m.buildInfo);
+
 			// populate topLevelDeclarations
-			if (m.buildInfo.topLevelDeclarations) {
+			if (topLevelDeclarations) {
 				const topLevelDeclarations = this.buildInfo.topLevelDeclarations;
 				if (topLevelDeclarations !== undefined) {
-					for (const decl of m.buildInfo.topLevelDeclarations) {
+					for (const decl of topLevelDeclarations) {
 						topLevelDeclarations.add(decl);
 					}
 				}
@@ -832,17 +871,24 @@ class ConcatenatedModule extends Module {
 			}
 
 			// populate assets
-			if (m.buildInfo.assets) {
+			if (assets) {
 				if (this.buildInfo.assets === undefined) {
 					this.buildInfo.assets = Object.create(null);
 				}
-				Object.assign(this.buildInfo.assets, m.buildInfo.assets);
+				Object.assign(
+					/** @type {NonNullable<BuildInfo["assets"]>} */
+					(
+						/** @type {BuildInfo} */
+						(this.buildInfo).assets
+					),
+					assets
+				);
 			}
-			if (m.buildInfo.assetsInfo) {
+			if (assetsInfo) {
 				if (this.buildInfo.assetsInfo === undefined) {
 					this.buildInfo.assetsInfo = new Map();
 				}
-				for (const [key, value] of m.buildInfo.assetsInfo) {
+				for (const [key, value] of assetsInfo) {
 					this.buildInfo.assetsInfo.set(key, value);
 				}
 			}
@@ -882,7 +928,9 @@ class ConcatenatedModule extends Module {
 		 * @returns {Iterable<{ connection: ModuleGraphConnection, runtimeCondition: RuntimeSpec | true }>} imported modules in order
 		 */
 		const getConcatenatedImports = module => {
-			let connections = Array.from(moduleGraph.getOutgoingConnections(module));
+			const connections = Array.from(
+				moduleGraph.getOutgoingConnections(module)
+			);
 			if (module === rootModule) {
 				for (const c of moduleGraph.getOutgoingConnections(this))
 					connections.push(c);
@@ -1042,7 +1090,7 @@ class ConcatenatedModule extends Module {
 	/**
 	 * @param {Module} rootModule the root module of the concatenation
 	 * @param {Set<Module>} modules all modules in the concatenation (including the root module)
-	 * @param {Object=} associatedObjectForCache object for caching
+	 * @param {object=} associatedObjectForCache object for caching
 	 * @param {string | HashConstructor=} hashFunction hash function to use
 	 * @returns {string} the identifier
 	 */
@@ -1053,17 +1101,17 @@ class ConcatenatedModule extends Module {
 		hashFunction = "md4"
 	) {
 		const cachedMakePathsRelative = makePathsRelative.bindContextCache(
-			rootModule.context,
+			/** @type {string} */ (rootModule.context),
 			associatedObjectForCache
 		);
-		let identifiers = [];
+		const identifiers = [];
 		for (const module of modules) {
 			identifiers.push(cachedMakePathsRelative(module.identifier()));
 		}
 		identifiers.sort();
 		const hash = createHash(hashFunction);
 		hash.update(identifiers.join(" "));
-		return rootModule.identifier() + "|" + hash.digest("hex");
+		return `${rootModule.identifier()}|${hash.digest("hex")}`;
 	}
 
 	/**
@@ -1136,12 +1184,12 @@ class ConcatenatedModule extends Module {
 		const topLevelDeclarations = new Set();
 
 		// List of additional names in scope for module references
-		/** @type {Map<string, { usedNames: Set<string>, alreadyCheckedScopes: Set<TODO> }>} */
+		/** @type {Map<string, { usedNames: UsedNames, alreadyCheckedScopes: Set<TODO> }>} */
 		const usedNamesInScopeInfo = new Map();
 		/**
 		 * @param {string} module module identifier
 		 * @param {string} id export id
-		 * @returns {{ usedNames: Set<string>, alreadyCheckedScopes: Set<TODO> }} info
+		 * @returns {{ usedNames: UsedNames, alreadyCheckedScopes: Set<TODO> }} info
 		 */
 		const getUsedNamesInScopeInfo = (module, id) => {
 			const key = `${module}-${id}`;
@@ -1171,6 +1219,10 @@ class ConcatenatedModule extends Module {
 				// We get ranges of all super class expressions to make
 				// renaming to work correctly
 				const superClassCache = new WeakMap();
+				/**
+				 * @param {Scope} scope scope
+				 * @returns {TODO} result
+				 */
 				const getSuperClassExpressions = scope => {
 					const cacheEntry = superClassCache.get(scope);
 					if (cacheEntry !== undefined) return cacheEntry;
@@ -1213,7 +1265,8 @@ class ConcatenatedModule extends Module {
 								runtimeTemplate,
 								neededNamespaceObjects,
 								false,
-								info.module.buildMeta.strictHarmonyModule,
+								/** @type {BuildMeta} */
+								(info.module.buildMeta).strictHarmonyModule,
 								true
 							);
 							if (!binding.ids) continue;
@@ -1224,8 +1277,10 @@ class ConcatenatedModule extends Module {
 								);
 							for (const expr of getSuperClassExpressions(reference.from)) {
 								if (
-									expr.range[0] <= reference.identifier.range[0] &&
-									expr.range[1] >= reference.identifier.range[1]
+									expr.range[0] <=
+										/** @type {Range} */ (reference.identifier.range)[0] &&
+									expr.range[1] >=
+										/** @type {Range} */ (reference.identifier.range)[1]
 								) {
 									for (const variable of expr.variables) {
 										usedNames.add(variable.name);
@@ -1284,8 +1339,12 @@ class ConcatenatedModule extends Module {
 								references.map(r => r.identifier).concat(variable.identifiers)
 							);
 							for (const identifier of allIdentifiers) {
-								const r = identifier.range;
-								const path = getPathInAst(info.ast, identifier);
+								const r = /** @type {Range} */ (identifier.range);
+								const path = getPathInAst(
+									/** @type {NonNullable<ConcatenatedModuleInfo["ast"]>} */
+									(info.ast),
+									identifier
+								);
 								if (path && path.length > 1) {
 									const maybeProperty =
 										path[1].type === "AssignmentPattern" &&
@@ -1322,7 +1381,9 @@ class ConcatenatedModule extends Module {
 						);
 						allUsedNames.add(namespaceObjectName);
 					}
-					info.namespaceObjectName = namespaceObjectName;
+					info.namespaceObjectName =
+						/** @type {string} */
+						(namespaceObjectName);
 					topLevelDeclarations.add(namespaceObjectName);
 					break;
 				}
@@ -1339,7 +1400,8 @@ class ConcatenatedModule extends Module {
 					break;
 				}
 			}
-			if (info.module.buildMeta.exportsType !== "namespace") {
+			const buildMeta = /** @type {BuildMeta} */ (info.module.buildMeta);
+			if (buildMeta.exportsType !== "namespace") {
 				const externalNameInterop = this.findNewName(
 					"namespaceObject",
 					allUsedNames,
@@ -1351,8 +1413,8 @@ class ConcatenatedModule extends Module {
 				topLevelDeclarations.add(externalNameInterop);
 			}
 			if (
-				info.module.buildMeta.exportsType === "default" &&
-				info.module.buildMeta.defaultObject !== "redirect"
+				buildMeta.exportsType === "default" &&
+				buildMeta.defaultObject !== "redirect"
 			) {
 				const externalNameInterop = this.findNewName(
 					"namespaceObject2",
@@ -1364,10 +1426,7 @@ class ConcatenatedModule extends Module {
 				info.interopNamespaceObject2Name = externalNameInterop;
 				topLevelDeclarations.add(externalNameInterop);
 			}
-			if (
-				info.module.buildMeta.exportsType === "dynamic" ||
-				!info.module.buildMeta.exportsType
-			) {
+			if (buildMeta.exportsType === "dynamic" || !buildMeta.exportsType) {
 				const externalNameInterop = this.findNewName(
 					"default",
 					allUsedNames,
@@ -1383,7 +1442,8 @@ class ConcatenatedModule extends Module {
 		// Find and replace references to modules
 		for (const info of moduleToInfoMap.values()) {
 			if (info.type === "concatenated") {
-				for (const reference of info.globalScope.through) {
+				const globalScope = /** @type {Scope} */ (info.globalScope);
+				for (const reference of globalScope.through) {
 					const name = reference.identifier.name;
 					const match = ConcatenationScope.matchModuleReference(name);
 					if (match) {
@@ -1401,10 +1461,11 @@ class ConcatenatedModule extends Module {
 							neededNamespaceObjects,
 							match.call,
 							!match.directImport,
-							info.module.buildMeta.strictHarmonyModule,
+							/** @type {BuildMeta} */
+							(info.module.buildMeta).strictHarmonyModule,
 							match.asiSafe
 						);
-						const r = reference.identifier.range;
+						const r = /** @type {Range} */ (reference.identifier.range);
 						const source = info.source;
 						// range is extended by 2 chars to cover the appended "._"
 						source.replace(r[0], r[1] + 1, finalName);
@@ -1424,8 +1485,12 @@ class ConcatenatedModule extends Module {
 		const rootInfo = /** @type {ConcatenatedModuleInfo} */ (
 			moduleToInfoMap.get(this.rootModule)
 		);
-		const strictHarmonyModule = rootInfo.module.buildMeta.strictHarmonyModule;
+		const strictHarmonyModule =
+			/** @type {BuildMeta} */
+			(rootInfo.module.buildMeta).strictHarmonyModule;
 		const exportsInfo = moduleGraph.getExportsInfo(rootInfo.module);
+		/** @type {Record<string, string>} */
+		const exportsFinalName = {};
 		for (const exportInfo of exportsInfo.orderedExports) {
 			const name = exportInfo.name;
 			if (exportInfo.provided === false) continue;
@@ -1450,12 +1515,15 @@ class ConcatenatedModule extends Module {
 						strictHarmonyModule,
 						true
 					);
+					exportsFinalName[used] = finalName;
 					return `/* ${
 						exportInfo.isReexport() ? "reexport" : "binding"
 					} */ ${finalName}`;
-				} catch (e) {
-					e.message += `\nwhile generating the root export '${name}' (used name: '${used}')`;
-					throw e;
+				} catch (err) {
+					/** @type {Error} */
+					(err).message +=
+						`\nwhile generating the root export '${name}' (used name: '${used}')`;
+					throw err;
 				}
 			});
 		}
@@ -1463,37 +1531,55 @@ class ConcatenatedModule extends Module {
 		const result = new ConcatSource();
 
 		// add harmony compatibility flag (must be first because of possible circular dependencies)
+		let shouldAddHarmonyFlag = false;
 		if (
 			moduleGraph.getExportsInfo(this).otherExportsInfo.getUsed(runtime) !==
 			UsageState.Unused
 		) {
-			result.add(`// ESM COMPAT FLAG\n`);
-			result.add(
-				runtimeTemplate.defineEsModuleFlagStatement({
-					exportsArgument: this.exportsArgument,
-					runtimeRequirements
-				})
-			);
+			shouldAddHarmonyFlag = true;
 		}
 
 		// define exports
 		if (exportsMap.size > 0) {
-			runtimeRequirements.add(RuntimeGlobals.exports);
-			runtimeRequirements.add(RuntimeGlobals.definePropertyGetters);
+			const { exportsDefinitions } = ConcatenatedModule.getCompilationHooks(
+				/** @type {Compilation} */ (this.compilation)
+			);
+
 			const definitions = [];
 			for (const [key, value] of exportsMap) {
 				definitions.push(
-					`\n  ${JSON.stringify(key)}: ${runtimeTemplate.returningFunction(
+					`\n  ${propertyName(key)}: ${runtimeTemplate.returningFunction(
 						value(requestShortener)
 					)}`
 				);
 			}
-			result.add(`\n// EXPORTS\n`);
-			result.add(
-				`${RuntimeGlobals.definePropertyGetters}(${
-					this.exportsArgument
-				}, {${definitions.join(",")}\n});\n`
-			);
+			const shouldSkipRenderDefinitions =
+				exportsDefinitions.call(exportsFinalName);
+
+			if (!shouldSkipRenderDefinitions) {
+				runtimeRequirements.add(RuntimeGlobals.exports);
+				runtimeRequirements.add(RuntimeGlobals.definePropertyGetters);
+
+				if (shouldAddHarmonyFlag) {
+					result.add("// ESM COMPAT FLAG\n");
+					result.add(
+						runtimeTemplate.defineEsModuleFlagStatement({
+							exportsArgument: this.exportsArgument,
+							runtimeRequirements
+						})
+					);
+				}
+
+				result.add("\n// EXPORTS\n");
+				result.add(
+					`${RuntimeGlobals.definePropertyGetters}(${
+						this.exportsArgument
+					}, {${definitions.join(",")}\n});\n`
+				);
+			} else {
+				/** @type {BuildMeta} */
+				(this.buildMeta).exportsFinalName = exportsFinalName;
+			}
 		}
 
 		// list unused exports
@@ -1524,13 +1610,14 @@ class ConcatenatedModule extends Module {
 						neededNamespaceObjects,
 						false,
 						undefined,
-						info.module.buildMeta.strictHarmonyModule,
+						/** @type {BuildMeta} */
+						(info.module.buildMeta).strictHarmonyModule,
 						true
 					);
 					nsObj.push(
-						`\n  ${JSON.stringify(
-							usedName
-						)}: ${runtimeTemplate.returningFunction(finalName)}`
+						`\n  ${propertyName(usedName)}: ${runtimeTemplate.returningFunction(
+							finalName
+						)}`
 					);
 				}
 			}
@@ -1539,7 +1626,7 @@ class ConcatenatedModule extends Module {
 				nsObj.length > 0
 					? `${RuntimeGlobals.definePropertyGetters}(${name}, {${nsObj.join(
 							","
-					  )}\n});\n`
+						)}\n});\n`
 					: "";
 			if (nsObj.length > 0)
 				runtimeRequirements.add(RuntimeGlobals.definePropertyGetters);
@@ -1609,7 +1696,7 @@ ${defineGetters}`
 						result.add(`if (${condition}) {\n`);
 					}
 					result.add(
-						`var ${info.name} = __webpack_require__(${JSON.stringify(
+						`var ${info.name} = ${RuntimeGlobals.require}(${JSON.stringify(
 							chunkGraph.getModuleId(info.module)
 						)});`
 					);
@@ -1695,7 +1782,9 @@ ${defineGetters}`
 					codeGenerationResults,
 					sourceTypes: TYPES
 				});
-				const source = codeGenResult.sources.get("javascript");
+				const source = /** @type {Source} */ (
+					codeGenResult.sources.get("javascript")
+				);
 				const data = codeGenResult.data;
 				const chunkInitFragments = data && data.get("chunkInitFragments");
 				const code = source.source().toString();
@@ -1704,7 +1793,8 @@ ${defineGetters}`
 					ast = JavascriptParser._parse(code, {
 						sourceType: "module"
 					});
-				} catch (err) {
+				} catch (_err) {
+					const err = /** @type {TODO} */ (_err);
 					if (
 						err.loc &&
 						typeof err.loc === "object" &&
@@ -1712,11 +1802,9 @@ ${defineGetters}`
 					) {
 						const lineNumber = err.loc.line;
 						const lines = code.split("\n");
-						err.message +=
-							"\n| " +
-							lines
-								.slice(Math.max(0, lineNumber - 3), lineNumber + 2)
-								.join("\n| ");
+						err.message += `\n| ${lines
+							.slice(Math.max(0, lineNumber - 3), lineNumber + 2)
+							.join("\n| ")}`;
 					}
 					throw err;
 				}
@@ -1727,7 +1815,7 @@ ${defineGetters}`
 					ignoreEval: true,
 					impliedStrict: true
 				});
-				const globalScope = scopeManager.acquire(ast);
+				const globalScope = /** @type {Scope} */ (scopeManager.acquire(ast));
 				const moduleScope = globalScope.childScopes[0];
 				const resultSource = new ReplaceSource(source);
 				info.runtimeRequirements = codeGenResult.runtimeRequirements;
@@ -1738,7 +1826,9 @@ ${defineGetters}`
 				info.globalScope = globalScope;
 				info.moduleScope = moduleScope;
 			} catch (err) {
-				err.message += `\nwhile analyzing module ${m.identifier()} for concatenation`;
+				/** @type {Error} */
+				(err).message +=
+					`\nwhile analyzing module ${m.identifier()} for concatenation`;
 				throw err;
 			}
 		}
@@ -1806,21 +1896,30 @@ ${defineGetters}`
 							`Unsupported concatenation entry type ${info.type}`
 						);
 				}
-				map.set(item.module, item);
-				return item;
-			} else {
-				/** @type {ReferenceToModuleInfo} */
-				const ref = {
-					type: "reference",
-					runtimeCondition: info.runtimeCondition,
-					target: item
-				};
-				return ref;
+				map.set(
+					/** @type {ModuleInfo} */ (item).module,
+					/** @type {ModuleInfo} */ (item)
+				);
+				return /** @type {ModuleInfo} */ (item);
 			}
+			/** @type {ReferenceToModuleInfo} */
+			const ref = {
+				type: "reference",
+				runtimeCondition: info.runtimeCondition,
+				target: item
+			};
+			return ref;
 		});
 		return [list, map];
 	}
 
+	/**
+	 * @param {string} oldName old name
+	 * @param {UsedNames} usedNamed1 used named 1
+	 * @param {UsedNames} usedNamed2 used named 2
+	 * @param {string} extraInfo extra info
+	 * @returns {string} found new name
+	 */
 	findNewName(oldName, usedNamed1, usedNamed2, extraInfo) {
 		let name = oldName;
 
@@ -1839,7 +1938,7 @@ ${defineGetters}`
 
 		const splittedInfo = extraInfo.split("/");
 		while (splittedInfo.length) {
-			name = splittedInfo.pop() + (name ? "_" + name : "");
+			name = splittedInfo.pop() + (name ? `_${name}` : "");
 			const nameIdent = Template.toIdentifier(name);
 			if (
 				!usedNamed1.has(nameIdent) &&
@@ -1852,6 +1951,7 @@ ${defineGetters}`
 		let nameWithNumber = Template.toIdentifier(`${name}_${i}`);
 		while (
 			usedNamed1.has(nameWithNumber) ||
+			// eslint-disable-next-line no-unmodified-loop-condition
 			(usedNamed2 && usedNamed2.has(nameWithNumber))
 		) {
 			i++;
@@ -1886,12 +1986,17 @@ ${defineGetters}`
 		super.updateHash(hash, context);
 	}
 
+	/**
+	 * @param {ObjectDeserializerContext} context context
+	 * @returns {ConcatenatedModule} ConcatenatedModule
+	 */
 	static deserialize(context) {
 		const obj = new ConcatenatedModule({
 			identifier: undefined,
 			rootModule: undefined,
 			modules: undefined,
-			runtime: undefined
+			runtime: undefined,
+			compilation: undefined
 		});
 		obj.deserialize(context);
 		return obj;

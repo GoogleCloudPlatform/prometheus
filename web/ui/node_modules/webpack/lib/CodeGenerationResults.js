@@ -5,7 +5,7 @@
 
 "use strict";
 
-const { provide } = require("./util/MapHelpers");
+const { getOrInsert } = require("./util/MapHelpers");
 const { first } = require("./util/SetHelpers");
 const createHash = require("./util/createHash");
 const { runtimeToString, RuntimeSpecMap } = require("./util/runtime");
@@ -42,7 +42,9 @@ class CodeGenerationResults {
 			);
 		}
 		if (runtime === undefined) {
-			if (entry.size > 1) {
+			if (
+				/** @type {RuntimeSpecMap<CodeGenerationResult>} */ (entry).size > 1
+			) {
 				const results = new Set(entry.values());
 				if (results.size !== 1) {
 					throw new Error(
@@ -53,9 +55,9 @@ class CodeGenerationResults {
 Caller might not support runtime-dependent code generation (opt-out via optimization.usedExports: "global").`
 					);
 				}
-				return first(results);
+				return /** @type {CodeGenerationResult} */ (first(results));
 			}
-			return entry.values().next().value;
+			return /** @type {CodeGenerationResult} */ (entry.values().next().value);
 		}
 		const result = entry.get(runtime);
 		if (result === undefined) {
@@ -86,9 +88,8 @@ Caller might not support runtime-dependent code generation (opt-out via optimiza
 		} else if (entry.size > 1) {
 			const results = new Set(entry.values());
 			return results.size === 1;
-		} else {
-			return entry.size === 1;
 		}
+		return entry.size === 1;
 	}
 
 	/**
@@ -147,7 +148,7 @@ Caller might not support runtime-dependent code generation (opt-out via optimiza
 	 * @returns {void}
 	 */
 	add(module, runtime, result) {
-		const map = provide(this.map, module, () => new RuntimeSpecMap());
+		const map = getOrInsert(this.map, module, () => new RuntimeSpecMap());
 		map.set(runtime, result);
 	}
 }

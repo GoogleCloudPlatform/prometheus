@@ -12,28 +12,51 @@ const Chunk = require("./Chunk");
 const Module = require("./Module");
 const { parseResource } = require("./util/identifier");
 
+/** @typedef {import("./ChunkGraph")} ChunkGraph */
+/** @typedef {import("./ChunkGraph").ModuleId} ModuleId */
 /** @typedef {import("./Compilation").AssetInfo} AssetInfo */
 /** @typedef {import("./Compilation").PathData} PathData */
 /** @typedef {import("./Compiler")} Compiler */
 
 const REGEXP = /\[\\*([\w:]+)\\*\]/gi;
 
+/**
+ * @param {string | number} id id
+ * @returns {string | number} result
+ */
 const prepareId = id => {
 	if (typeof id !== "string") return id;
 
 	if (/^"\s\+*.*\+\s*"$/.test(id)) {
 		const match = /^"\s\+*\s*(.*)\s*\+\s*"$/.exec(id);
 
-		return `" + (${match[1]} + "").replace(/(^[.-]|[^a-zA-Z0-9_-])+/g, "_") + "`;
+		return `" + (${
+			/** @type {string[]} */ (match)[1]
+		} + "").replace(/(^[.-]|[^a-zA-Z0-9_-])+/g, "_") + "`;
 	}
 
 	return id.replace(/(^[.-]|[^a-zA-Z0-9_-])+/g, "_");
 };
 
+/**
+ * @callback ReplacerFunction
+ * @param {string} match
+ * @param {string | undefined} arg
+ * @param {string} input
+ */
+
+/**
+ * @param {ReplacerFunction} replacer replacer
+ * @param {((arg0: number) => string) | undefined} handler handler
+ * @param {AssetInfo | undefined} assetInfo asset info
+ * @param {string} hashName hash name
+ * @returns {ReplacerFunction} hash replacer function
+ */
 const hashLength = (replacer, handler, assetInfo, hashName) => {
+	/** @type {ReplacerFunction} */
 	const fn = (match, arg, input) => {
 		let result;
-		const length = arg && parseInt(arg, 10);
+		const length = arg && Number.parseInt(arg, 10);
 
 		if (length && handler) {
 			result = handler(length);
@@ -58,7 +81,15 @@ const hashLength = (replacer, handler, assetInfo, hashName) => {
 	return fn;
 };
 
+/** @typedef {(match: string, arg?: string, input?: string) => string} Replacer */
+
+/**
+ * @param {string | number | null | undefined | (() => string | number | null | undefined)} value value
+ * @param {boolean=} allowEmpty allow empty
+ * @returns {Replacer} replacer
+ */
 const replacer = (value, allowEmpty) => {
+	/** @type {Replacer} */
 	const fn = (match, arg, input) => {
 		if (typeof value === "function") {
 			value = value();
@@ -71,9 +102,9 @@ const replacer = (value, allowEmpty) => {
 			}
 
 			return "";
-		} else {
-			return `${value}`;
 		}
+
+		return `${value}`;
 	};
 
 	return fn;
@@ -81,6 +112,12 @@ const replacer = (value, allowEmpty) => {
 
 const deprecationCache = new Map();
 const deprecatedFunction = (() => () => {})();
+/**
+ * @param {Function} fn function
+ * @param {string} message message
+ * @param {string} code code
+ * @returns {function(...any[]): void} function with deprecation output
+ */
 const deprecated = (fn, message, code) => {
 	let d = deprecationCache.get(message);
 	if (d === undefined) {
@@ -93,10 +130,12 @@ const deprecated = (fn, message, code) => {
 	};
 };
 
+/** @typedef {string | function(PathData, AssetInfo=): string} TemplatePath */
+
 /**
- * @param {string | function(PathData, AssetInfo=): string} path the raw path
+ * @param {TemplatePath} path the raw path
  * @param {PathData} data context data
- * @param {AssetInfo} assetInfo extra info about the asset (will be written to)
+ * @param {AssetInfo | undefined} assetInfo extra info about the asset (will be written to)
  * @returns {string} the interpolated path
  */
 const replacePathVariables = (path, data, assetInfo) => {
@@ -119,7 +158,7 @@ const replacePathVariables = (path, data, assetInfo) => {
 	// [ext] - .js
 	if (typeof data.filename === "string") {
 		// check that filename is data uri
-		let match = data.filename.match(/^data:([^;,]+)/);
+		const match = data.filename.match(/^data:([^;,]+)/);
 		if (match) {
 			const ext = mime.extension(match[1]);
 			const emptyReplacer = replacer("", true);
@@ -227,7 +266,7 @@ const replacePathVariables = (path, data, assetInfo) => {
 			),
 			data.contentHashWithLength ||
 				("contentHashWithLength" in chunk && chunk.contentHashWithLength
-					? chunk.contentHashWithLength[contentHashType]
+					? chunk.contentHashWithLength[/** @type {string} */ (contentHashType)]
 					: undefined),
 			assetInfo,
 			"contenthash"
@@ -255,13 +294,17 @@ const replacePathVariables = (path, data, assetInfo) => {
 
 		const idReplacer = replacer(() =>
 			prepareId(
-				module instanceof Module ? chunkGraph.getModuleId(module) : module.id
+				module instanceof Module
+					? /** @type {ModuleId} */
+						(/** @type {ChunkGraph} */ (chunkGraph).getModuleId(module))
+					: module.id
 			)
 		);
 		const moduleHashReplacer = hashLength(
 			replacer(() =>
 				module instanceof Module
-					? chunkGraph.getRenderedModuleHash(module, data.runtime)
+					? /** @type {ChunkGraph} */
+						(chunkGraph).getRenderedModuleHash(module, data.runtime)
 					: module.hash
 			),
 			"hashWithLength" in module ? module.hashWithLength : undefined,
@@ -269,7 +312,7 @@ const replacePathVariables = (path, data, assetInfo) => {
 			"modulehash"
 		);
 		const contentHashReplacer = hashLength(
-			replacer(data.contentHash),
+			replacer(/** @type {string} */ (data.contentHash)),
 			undefined,
 			assetInfo,
 			"contenthash"
@@ -300,7 +343,7 @@ const replacePathVariables = (path, data, assetInfo) => {
 	if (typeof data.runtime === "string") {
 		replacements.set(
 			"runtime",
-			replacer(() => prepareId(data.runtime))
+			replacer(() => prepareId(/** @type {string} */ (data.runtime)))
 		);
 	} else {
 		replacements.set("runtime", replacer("_"));

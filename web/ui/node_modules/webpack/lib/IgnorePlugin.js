@@ -28,14 +28,15 @@ class IgnorePlugin {
 		validate(options);
 		this.options = options;
 
-		/** @private @type {Function} */
+		/**
+		 * @private
+		 * @type {Function}
+		 */
 		this.checkIgnore = this.checkIgnore.bind(this);
 	}
 
 	/**
-	 * Note that if "contextRegExp" is given, both the "resourceRegExp"
-	 * and "contextRegExp" have to match.
-	 *
+	 * Note that if "contextRegExp" is given, both the "resourceRegExp" and "contextRegExp" have to match.
 	 * @param {ResolveData} resolveData resolve data
 	 * @returns {false|undefined} returns false when the request should be ignored, otherwise undefined
 	 */

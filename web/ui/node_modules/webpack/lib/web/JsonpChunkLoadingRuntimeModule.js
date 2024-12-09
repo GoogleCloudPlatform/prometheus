@@ -14,9 +14,11 @@ const { getInitialChunkIds } = require("../javascript/StartupHelpers");
 const compileBooleanMatcher = require("../util/compileBooleanMatcher");
 
 /** @typedef {import("../Chunk")} Chunk */
+/** @typedef {import("../ChunkGraph")} ChunkGraph */
+/** @typedef {import("../Module").ReadOnlyRuntimeRequirements} ReadOnlyRuntimeRequirements */
 
 /**
- * @typedef {Object} JsonpCompilationPluginHooks
+ * @typedef {object} JsonpCompilationPluginHooks
  * @property {SyncWaterfallHook<[string, Chunk]>} linkPreload
  * @property {SyncWaterfallHook<[string, Chunk]>} linkPrefetch
  */
@@ -46,6 +48,9 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 		return hooks;
 	}
 
+	/**
+	 * @param {ReadOnlyRuntimeRequirements} runtimeRequirements runtime requirements
+	 */
 	constructor(runtimeRequirements) {
 		super("jsonp chunk loading", RuntimeModule.STAGE_ATTACH);
 		this._runtimeRequirements = runtimeRequirements;
@@ -60,16 +65,15 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 		const options = chunk.getEntryOptions();
 		if (options && options.baseUri) {
 			return `${RuntimeGlobals.baseURI} = ${JSON.stringify(options.baseUri)};`;
-		} else {
-			return `${RuntimeGlobals.baseURI} = document.baseURI || self.location.href;`;
 		}
+		return `${RuntimeGlobals.baseURI} = document.baseURI || self.location.href;`;
 	}
 
 	/**
-	 * @returns {string} runtime code
+	 * @returns {string | null} runtime code
 	 */
 	generate() {
-		const { chunkGraph, compilation, chunk } = this;
+		const compilation = /** @type {Compilation} */ (this.compilation);
 		const {
 			runtimeTemplate,
 			outputOptions: {
@@ -105,9 +109,14 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 		const withPreload = this._runtimeRequirements.has(
 			RuntimeGlobals.preloadChunkHandlers
 		);
+		const withFetchPriority = this._runtimeRequirements.has(
+			RuntimeGlobals.hasFetchPriority
+		);
 		const chunkLoadingGlobalExpr = `${globalObject}[${JSON.stringify(
 			chunkLoadingGlobal
 		)}]`;
+		const chunkGraph = /** @type {ChunkGraph} */ (this.chunkGraph);
+		const chunk = /** @type {Chunk} */ (this.chunk);
 		const conditionMap = chunkGraph.getChunkConditionMap(chunk, chunkHasJs);
 		const hasJsMatcher = compileBooleanMatcher(conditionMap);
 		const initialChunkIds = getInitialChunkIds(chunk, chunkGraph, chunkHasJs);
@@ -135,7 +144,7 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 			withLoading
 				? Template.asString([
 						`${fn}.j = ${runtimeTemplate.basicFunction(
-							"chunkId, promises",
+							`chunkId, promises${withFetchPriority ? ", fetchPriority" : ""}`,
 							hasJsMatcher !== false
 								? Template.indent([
 										"// JSONP chunk loading for javascript",
@@ -156,7 +165,7 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 												Template.indent([
 													"// setup Promise in chunk cache",
 													`var promise = new Promise(${runtimeTemplate.expressionFunction(
-														`installedChunkData = installedChunks[chunkId] = [resolve, reject]`,
+														"installedChunkData = installedChunks[chunkId] = [resolve, reject]",
 														"resolve, reject"
 													)});`,
 													"promises.push(installedChunkData[2] = promise);",
@@ -187,23 +196,29 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 															"}"
 														]
 													)};`,
-													`${RuntimeGlobals.loadScript}(url, loadingEnded, "chunk-" + chunkId, chunkId);`
+													`${
+														RuntimeGlobals.loadScript
+													}(url, loadingEnded, "chunk-" + chunkId, chunkId${
+														withFetchPriority ? ", fetchPriority" : ""
+													});`
 												]),
-												"} else installedChunks[chunkId] = 0;"
+												hasJsMatcher === true
+													? "}"
+													: "} else installedChunks[chunkId] = 0;"
 											]),
 											"}"
 										]),
 										"}"
-								  ])
+									])
 								: Template.indent(["installedChunks[chunkId] = 0;"])
 						)};`
-				  ])
+					])
 				: "// no chunk on demand loading",
 			"",
 			withPrefetch && hasJsMatcher !== false
 				? `${
 						RuntimeGlobals.prefetchChunkHandlers
-				  }.j = ${runtimeTemplate.basicFunction("chunkId", [
+					}.j = ${runtimeTemplate.basicFunction("chunkId", [
 						`if((!${
 							RuntimeGlobals.hasOwnProperty
 						}(installedChunks, chunkId) || installedChunks[chunkId] === undefined) && ${
@@ -217,7 +232,7 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 									crossOriginLoading
 										? `link.crossOrigin = ${JSON.stringify(
 												crossOriginLoading
-										  )};`
+											)};`
 										: "",
 									`if (${RuntimeGlobals.scriptNonce}) {`,
 									Template.indent(
@@ -233,13 +248,13 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 							"document.head.appendChild(link);"
 						]),
 						"}"
-				  ])};`
+					])};`
 				: "// no prefetching",
 			"",
 			withPreload && hasJsMatcher !== false
 				? `${
 						RuntimeGlobals.preloadChunkHandlers
-				  }.j = ${runtimeTemplate.basicFunction("chunkId", [
+					}.j = ${runtimeTemplate.basicFunction("chunkId", [
 						`if((!${
 							RuntimeGlobals.hasOwnProperty
 						}(installedChunks, chunkId) || installedChunks[chunkId] === undefined) && ${
@@ -250,7 +265,7 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 							linkPreload.call(
 								Template.asString([
 									"var link = document.createElement('link');",
-									scriptType
+									scriptType && scriptType !== "module"
 										? `link.type = ${JSON.stringify(scriptType)};`
 										: "",
 									"link.charset = 'utf-8';",
@@ -259,8 +274,10 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 										`link.setAttribute("nonce", ${RuntimeGlobals.scriptNonce});`
 									),
 									"}",
-									'link.rel = "preload";',
-									'link.as = "script";',
+									scriptType === "module"
+										? 'link.rel = "modulepreload";'
+										: 'link.rel = "preload";',
+									scriptType === "module" ? "" : 'link.as = "script";',
 									`link.href = ${RuntimeGlobals.publicPath} + ${RuntimeGlobals.getChunkScriptFilename}(chunkId);`,
 									crossOriginLoading
 										? crossOriginLoading === "use-credentials"
@@ -273,7 +290,7 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 														)};`
 													),
 													"}"
-											  ])
+												])
 										: ""
 								]),
 								chunk
@@ -281,7 +298,7 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 							"document.head.appendChild(link);"
 						]),
 						"}"
-				  ])};`
+					])};`
 				: "// no preloaded",
 			"",
 			withHmr
@@ -366,7 +383,7 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 								/\$hmrInvalidateModuleHandlers\$/g,
 								RuntimeGlobals.hmrInvalidateModuleHandlers
 							)
-				  ])
+					])
 				: "// no HMR",
 			"",
 			withHmrManifest
@@ -383,16 +400,16 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 								"return response.json();"
 							])});`
 						])};`
-				  ])
+					])
 				: "// no HMR manifest",
 			"",
 			withOnChunkLoad
 				? `${
 						RuntimeGlobals.onChunksLoaded
-				  }.j = ${runtimeTemplate.returningFunction(
+					}.j = ${runtimeTemplate.returningFunction(
 						"installedChunks[chunkId] === 0",
 						"chunkId"
-				  )};`
+					)};`
 				: "// no on chunks loaded",
 			"",
 			withCallback || withLoading
@@ -422,7 +439,7 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 										"}"
 									]),
 									"}",
-									"if(runtime) var result = runtime(__webpack_require__);"
+									`if(runtime) var result = runtime(${RuntimeGlobals.require});`
 								]),
 								"}",
 								"if(parentChunkLoadingFunction) parentChunkLoadingFunction(data);",
@@ -444,7 +461,7 @@ class JsonpChunkLoadingRuntimeModule extends RuntimeModule {
 						`var chunkLoadingGlobal = ${chunkLoadingGlobalExpr} = ${chunkLoadingGlobalExpr} || [];`,
 						"chunkLoadingGlobal.forEach(webpackJsonpCallback.bind(null, 0));",
 						"chunkLoadingGlobal.push = webpackJsonpCallback.bind(null, chunkLoadingGlobal.push.bind(chunkLoadingGlobal));"
-				  ])
+					])
 				: "// no jsonp function"
 		]);
 	}

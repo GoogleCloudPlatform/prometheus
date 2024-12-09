@@ -8,6 +8,7 @@
 const { OriginalSource, RawSource } = require("webpack-sources");
 const AsyncDependenciesBlock = require("../AsyncDependenciesBlock");
 const Module = require("../Module");
+const { JAVASCRIPT_MODULE_TYPE_DYNAMIC } = require("../ModuleTypeConstants");
 const RuntimeGlobals = require("../RuntimeGlobals");
 const Template = require("../Template");
 const StaticExportsDependency = require("../dependencies/StaticExportsDependency");
@@ -22,36 +23,41 @@ const ContainerExposedDependency = require("./ContainerExposedDependency");
 /** @typedef {import("../Module").CodeGenerationResult} CodeGenerationResult */
 /** @typedef {import("../Module").LibIdentOptions} LibIdentOptions */
 /** @typedef {import("../Module").NeedBuildContext} NeedBuildContext */
+/** @typedef {import("../Module").SourceTypes} SourceTypes */
 /** @typedef {import("../RequestShortener")} RequestShortener */
 /** @typedef {import("../ResolverFactory").ResolverWithOptions} ResolverWithOptions */
 /** @typedef {import("../WebpackError")} WebpackError */
+/** @typedef {import("../serialization/ObjectMiddleware").ObjectDeserializerContext} ObjectDeserializerContext */
+/** @typedef {import("../serialization/ObjectMiddleware").ObjectSerializerContext} ObjectSerializerContext */
 /** @typedef {import("../util/Hash")} Hash */
 /** @typedef {import("../util/fs").InputFileSystem} InputFileSystem */
 /** @typedef {import("./ContainerEntryDependency")} ContainerEntryDependency */
 
 /**
- * @typedef {Object} ExposeOptions
+ * @typedef {object} ExposeOptions
  * @property {string[]} import requests to exposed modules (last one is exported)
  * @property {string} name custom chunk name for the exposed module
  */
+
+/** @typedef {[string, ExposeOptions][]} ExposesList */
 
 const SOURCE_TYPES = new Set(["javascript"]);
 
 class ContainerEntryModule extends Module {
 	/**
 	 * @param {string} name container entry name
-	 * @param {[string, ExposeOptions][]} exposes list of exposed modules
+	 * @param {ExposesList} exposes list of exposed modules
 	 * @param {string} shareScope name of the share scope
 	 */
 	constructor(name, exposes, shareScope) {
-		super("javascript/dynamic", null);
+		super(JAVASCRIPT_MODULE_TYPE_DYNAMIC, null);
 		this._name = name;
 		this._exposes = exposes;
 		this._shareScope = shareScope;
 	}
 
 	/**
-	 * @returns {Set<string>} types available (do not mutate)
+	 * @returns {SourceTypes} types available (do not mutate)
 	 */
 	getSourceTypes() {
 		return SOURCE_TYPES;
@@ -71,7 +77,7 @@ class ContainerEntryModule extends Module {
 	 * @returns {string} a user readable identifier of the module
 	 */
 	readableIdentifier(requestShortener) {
-		return `container entry`;
+		return "container entry";
 	}
 
 	/**
@@ -199,7 +205,7 @@ class ContainerEntryModule extends Module {
 		}
 
 		const source = Template.asString([
-			`var moduleMap = {`,
+			"var moduleMap = {",
 			Template.indent(getters.join(",\n")),
 			"};",
 			`var get = ${runtimeTemplate.basicFunction("module, getScope", [
@@ -259,6 +265,9 @@ class ContainerEntryModule extends Module {
 		return 42;
 	}
 
+	/**
+	 * @param {ObjectSerializerContext} context context
+	 */
 	serialize(context) {
 		const { write } = context;
 		write(this._name);
@@ -267,6 +276,10 @@ class ContainerEntryModule extends Module {
 		super.serialize(context);
 	}
 
+	/**
+	 * @param {ObjectDeserializerContext} context context
+	 * @returns {ContainerEntryModule} deserialized container entry module
+	 */
 	static deserialize(context) {
 		const { read } = context;
 		const obj = new ContainerEntryModule(read(), read(), read());

@@ -13,6 +13,7 @@
 /** @typedef {import("./DependencyTemplate")} DependencyTemplate */
 /** @typedef {import("./DependencyTemplates")} DependencyTemplates */
 /** @typedef {import("./Module").ConcatenationBailoutReasonContext} ConcatenationBailoutReasonContext */
+/** @typedef {import("./Module").RuntimeRequirements} RuntimeRequirements */
 /** @typedef {import("./ModuleGraph")} ModuleGraph */
 /** @typedef {import("./NormalModule")} NormalModule */
 /** @typedef {import("./RuntimeTemplate")} RuntimeTemplate */
@@ -20,12 +21,12 @@
 /** @typedef {import("./util/runtime").RuntimeSpec} RuntimeSpec */
 
 /**
- * @typedef {Object} GenerateContext
+ * @typedef {object} GenerateContext
  * @property {DependencyTemplates} dependencyTemplates mapping from dependencies to templates
  * @property {RuntimeTemplate} runtimeTemplate the runtime template
  * @property {ModuleGraph} moduleGraph the module graph
  * @property {ChunkGraph} chunkGraph the chunk graph
- * @property {Set<string>} runtimeRequirements the requirements for runtime
+ * @property {RuntimeRequirements} runtimeRequirements the requirements for runtime
  * @property {RuntimeSpec} runtime the runtime
  * @property {ConcatenationScope=} concatenationScope when in concatenated module, information about other concatenated modules
  * @property {CodeGenerationResults=} codeGenerationResults code generation results of other modules (need to have a codeGenerationDependency to use that)
@@ -34,17 +35,18 @@
  */
 
 /**
- * @typedef {Object} UpdateHashContext
+ * @typedef {object} UpdateHashContext
  * @property {NormalModule} module the module
  * @property {ChunkGraph} chunkGraph
  * @property {RuntimeSpec} runtime
  * @property {RuntimeTemplate=} runtimeTemplate
  */
 
-/**
- *
- */
 class Generator {
+	/**
+	 * @param {Record<string, Generator>} map map of types
+	 * @returns {ByTypeGenerator} generator by type
+	 */
 	static byType(map) {
 		return new ByTypeGenerator(map);
 	}
@@ -106,6 +108,9 @@ class Generator {
 }
 
 class ByTypeGenerator extends Generator {
+	/**
+	 * @param {Record<string, Generator>} map map of types
+	 */
 	constructor(map) {
 		super();
 		this.map = map;
@@ -125,8 +130,8 @@ class ByTypeGenerator extends Generator {
 	 * @param {string=} type source type
 	 * @returns {number} estimate size of the module
 	 */
-	getSize(module, type) {
-		const t = type || "javascript";
+	getSize(module, type = "javascript") {
+		const t = type;
 		const generator = this.map[t];
 		return generator ? generator.getSize(module, t) : 0;
 	}

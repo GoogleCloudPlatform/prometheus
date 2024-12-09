@@ -30,11 +30,15 @@ const validate = createSchemaValidation(
 	}
 );
 
-const moveModuleBetween = (chunkGraph, oldChunk, newChunk) => {
-	return module => {
-		chunkGraph.disconnectChunkAndModule(oldChunk, module);
-		chunkGraph.connectChunkAndModule(newChunk, module);
-	};
+/**
+ * @param {ChunkGraph} chunkGraph the chunk graph
+ * @param {Chunk} oldChunk the old chunk
+ * @param {Chunk} newChunk the new chunk
+ * @returns {(module: Module) => void} function to move module between chunks
+ */
+const moveModuleBetween = (chunkGraph, oldChunk, newChunk) => module => {
+	chunkGraph.disconnectChunkAndModule(oldChunk, module);
+	chunkGraph.connectChunkAndModule(newChunk, module);
 };
 
 /**
@@ -42,11 +46,8 @@ const moveModuleBetween = (chunkGraph, oldChunk, newChunk) => {
  * @param {Chunk} chunk the chunk
  * @returns {function(Module): boolean} filter for entry module
  */
-const isNotAEntryModule = (chunkGraph, chunk) => {
-	return module => {
-		return !chunkGraph.isEntryModuleInChunk(module, chunk);
-	};
-};
+const isNotAEntryModule = (chunkGraph, chunk) => module =>
+	!chunkGraph.isEntryModuleInChunk(module, chunk);
 
 /** @type {WeakSet<Chunk>} */
 const recordedChunks = new WeakSet();
@@ -92,7 +93,9 @@ class AggressiveSplittingPlugin {
 			compilation => {
 				let needAdditionalSeal = false;
 				let newSplits;
+				/** @type {Set<Chunk>} */
 				let fromAggressiveSplittingSet;
+				/** @type {Map<Chunk, TODO>} */
 				let chunkSplitDataMap;
 				compilation.hooks.optimize.tap("AggressiveSplittingPlugin", () => {
 					newSplits = [];
@@ -133,8 +136,8 @@ class AggressiveSplittingPlugin {
 							? recordedSplits.concat(newSplits)
 							: recordedSplits;
 
-						const minSize = this.options.minSize;
-						const maxSize = this.options.maxSize;
+						const minSize = /** @type {number} */ (this.options.minSize);
+						const maxSize = /** @type {number} */ (this.options.maxSize);
 
 						const applySplit = splitData => {
 							// Cannot split if id is already taken
@@ -183,9 +186,9 @@ class AggressiveSplittingPlugin {
 							const newChunk = compilation.addChunk();
 							newChunk.chunkReason = "aggressive splitted";
 							for (const chunk of selectedChunks) {
-								selectedModules.forEach(
-									moveModuleBetween(chunkGraph, chunk, newChunk)
-								);
+								for (const module of selectedModules) {
+									moveModuleBetween(chunkGraph, chunk, newChunk)(module);
+								}
 								chunk.split(newChunk);
 								chunk.name = null;
 							}
@@ -269,12 +272,14 @@ class AggressiveSplittingPlugin {
 						// We remove invalid splittings and try again
 						for (const chunk of compilation.chunks) {
 							const splitData = chunkSplitDataMap.get(chunk);
-							if (splitData !== undefined) {
-								if (splitData.hash && chunk.hash !== splitData.hash) {
-									// Split was successful, but hash doesn't equal
-									// We can throw away the split since it's useless now
-									invalidSplits.add(splitData);
-								}
+							if (
+								splitData !== undefined &&
+								splitData.hash &&
+								chunk.hash !== splitData.hash
+							) {
+								// Split was successful, but hash doesn't equal
+								// We can throw away the split since it's useless now
+								invalidSplits.add(splitData);
 							}
 						}
 

@@ -44,21 +44,30 @@ Technically any value can be used.
 */
 
 /**
- * @typedef {Object} ObjectSerializerContext
+ * @typedef {object} ObjectSerializerContext
  * @property {function(any): void} write
+ * @property {(function(any): void)=} writeLazy
+ * @property {(function(any, object=): (() => Promise<any> | any))=} writeSeparate
+ * @property {function(any): void} setCircularReference
  */
 
 /**
- * @typedef {Object} ObjectDeserializerContext
+ * @typedef {object} ObjectDeserializerContext
  * @property {function(): any} read
+ * @property {function(any): void} setCircularReference
  */
 
 /**
- * @typedef {Object} ObjectSerializer
+ * @typedef {object} ObjectSerializer
  * @property {function(any, ObjectSerializerContext): void} serialize
  * @property {function(ObjectDeserializerContext): any} deserialize
  */
 
+/**
+ * @template T
+ * @param {Set<T>} set set
+ * @param {number} size count of items to keep
+ */
 const setSetSize = (set, size) => {
 	let i = 0;
 	for (const item of set) {
@@ -68,6 +77,11 @@ const setSetSize = (set, size) => {
 	}
 };
 
+/**
+ * @template K, X
+ * @param {Map<K, X>} map map
+ * @param {number} size count of items to keep
+ */
 const setMapSize = (map, size) => {
 	let i = 0;
 	for (const item of map.keys()) {
@@ -95,9 +109,12 @@ const ESCAPE_UNDEFINED = false;
 
 const CURRENT_VERSION = 2;
 
+/** @type {Map<Constructor, { request?: string, name?: string | number | null, serializer?: ObjectSerializer }>} */
 const serializers = new Map();
+/** @type {Map<string | number, ObjectSerializer>} */
 const serializerInversed = new Map();
 
+/** @type {Set<string>} */
 const loadedRequests = new Set();
 
 const NOT_SERIALIZABLE = {};
@@ -120,7 +137,9 @@ jsTypes.set(TypeError, new ErrorObjectSerializer(TypeError));
 // If in a sandboxed environment (e. g. jest), this escapes the sandbox and registers
 // real Object and Array types to. These types may occur in the wild too, e. g. when
 // using Structured Clone in postMessage.
+// eslint-disable-next-line n/exports-style
 if (exports.constructor !== Object) {
+	// eslint-disable-next-line jsdoc/check-types, n/exports-style
 	const Obj = /** @type {typeof Object} */ (exports.constructor);
 	const Fn = /** @type {typeof Function} */ (Obj.constructor);
 	for (const [type, config] of Array.from(jsTypes)) {
@@ -143,7 +162,10 @@ if (exports.constructor !== Object) {
 }
 
 for (const { request, name, serializer } of serializers.values()) {
-	serializerInversed.set(`${request}/${name}`, serializer);
+	serializerInversed.set(
+		`${request}/${name}`,
+		/** @type {ObjectSerializer} */ (serializer)
+	);
 }
 
 /** @type {Map<RegExp, (request: string) => boolean>} */
@@ -164,6 +186,7 @@ class ObjectMiddleware extends SerializerMiddleware {
 		this.extendContext = extendContext;
 		this._hashFunction = hashFunction;
 	}
+
 	/**
 	 * @param {RegExp} regExp RegExp for which the request is tested
 	 * @param {function(string): boolean} loader loader to load the request, returns true when successful
@@ -176,12 +199,12 @@ class ObjectMiddleware extends SerializerMiddleware {
 	/**
 	 * @param {Constructor} Constructor the constructor
 	 * @param {string} request the request which will be required when deserializing
-	 * @param {string} name the name to make multiple serializer unique when sharing a request
+	 * @param {string | null} name the name to make multiple serializer unique when sharing a request
 	 * @param {ObjectSerializer} serializer the serializer
 	 * @returns {void}
 	 */
 	static register(Constructor, request, name, serializer) {
-		const key = request + "/" + name;
+		const key = `${request}/${name}`;
 
 		if (serializers.has(Constructor)) {
 			throw new Error(
@@ -240,8 +263,13 @@ class ObjectMiddleware extends SerializerMiddleware {
 		return config;
 	}
 
+	/**
+	 * @param {string} request request
+	 * @param {TODO} name name
+	 * @returns {ObjectSerializer} serializer
+	 */
 	static getDeserializerFor(request, name) {
-		const key = request + "/" + name;
+		const key = `${request}/${name}`;
 		const serializer = serializerInversed.get(key);
 
 		if (serializer === undefined) {
@@ -251,15 +279,20 @@ class ObjectMiddleware extends SerializerMiddleware {
 		return serializer;
 	}
 
+	/**
+	 * @param {string} request request
+	 * @param {TODO} name name
+	 * @returns {ObjectSerializer} serializer
+	 */
 	static _getDeserializerForWithoutError(request, name) {
-		const key = request + "/" + name;
+		const key = `${request}/${name}`;
 		const serializer = serializerInversed.get(key);
 		return serializer;
 	}
 
 	/**
 	 * @param {DeserializedType} data data
-	 * @param {Object} context context object
+	 * @param {object} context context object
 	 * @returns {SerializedType|Promise<SerializedType>} serialized data
 	 */
 	serialize(data, context) {
@@ -285,17 +318,16 @@ class ObjectMiddleware extends SerializerMiddleware {
 					}
 					bufferDedupeMap.set(len, [entry, buf]);
 					return buf;
-				} else {
-					const hash = toHash(entry, this._hashFunction);
-					const newMap = new Map();
-					newMap.set(hash, entry);
-					bufferDedupeMap.set(len, newMap);
-					const hashBuf = toHash(buf, this._hashFunction);
-					if (hash === hashBuf) {
-						return entry;
-					}
-					return buf;
 				}
+				const hash = toHash(entry, this._hashFunction);
+				const newMap = new Map();
+				newMap.set(hash, entry);
+				bufferDedupeMap.set(len, newMap);
+				const hashBuf = toHash(buf, this._hashFunction);
+				if (hash === hashBuf) {
+					return entry;
+				}
+				return buf;
 			} else if (Array.isArray(entry)) {
 				if (entry.length < 16) {
 					for (const item of entry) {
@@ -305,32 +337,29 @@ class ObjectMiddleware extends SerializerMiddleware {
 					}
 					entry.push(buf);
 					return buf;
-				} else {
-					const newMap = new Map();
-					const hash = toHash(buf, this._hashFunction);
-					let found;
-					for (const item of entry) {
-						const itemHash = toHash(item, this._hashFunction);
-						newMap.set(itemHash, item);
-						if (found === undefined && itemHash === hash) found = item;
-					}
-					bufferDedupeMap.set(len, newMap);
-					if (found === undefined) {
-						newMap.set(hash, buf);
-						return buf;
-					} else {
-						return found;
-					}
 				}
-			} else {
+				const newMap = new Map();
 				const hash = toHash(buf, this._hashFunction);
-				const item = entry.get(hash);
-				if (item !== undefined) {
-					return item;
+				let found;
+				for (const item of entry) {
+					const itemHash = toHash(item, this._hashFunction);
+					newMap.set(itemHash, item);
+					if (found === undefined && itemHash === hash) found = item;
 				}
-				entry.set(hash, buf);
-				return buf;
+				bufferDedupeMap.set(len, newMap);
+				if (found === undefined) {
+					newMap.set(hash, buf);
+					return buf;
+				}
+				return found;
 			}
+			const hash = toHash(buf, this._hashFunction);
+			const item = entry.get(hash);
+			if (item !== undefined) {
+				return item;
+			}
+			entry.set(hash, buf);
+			return buf;
 		};
 		let currentPosTypeLookup = 0;
 		let objectTypeLookup = new Map();
@@ -354,7 +383,7 @@ class ObjectMiddleware extends SerializerMiddleware {
 						if (request) {
 							return `${request}${name ? `.${name}` : ""}`;
 						}
-					} catch (e) {
+					} catch (_err) {
 						// ignore -> fallback
 					}
 					if (typeof item === "object" && item !== null) {
@@ -372,10 +401,13 @@ class ObjectMiddleware extends SerializerMiddleware {
 							", "
 						)} }`;
 					}
+					if (typeof item === "bigint") {
+						return `BigInt ${item}n`;
+					}
 					try {
 						return `${item}`;
-					} catch (e) {
-						return `(${e.message})`;
+					} catch (err) {
+						return `(${err.message})`;
 					}
 				})
 				.join(" -> ");
@@ -385,16 +417,16 @@ class ObjectMiddleware extends SerializerMiddleware {
 			write(value, key) {
 				try {
 					process(value);
-				} catch (e) {
-					if (e !== NOT_SERIALIZABLE) {
+				} catch (err) {
+					if (err !== NOT_SERIALIZABLE) {
 						if (hasDebugInfoAttached === undefined)
 							hasDebugInfoAttached = new WeakSet();
-						if (!hasDebugInfoAttached.has(e)) {
-							e.message += `\nwhile serializing ${stackToString(value)}`;
-							hasDebugInfoAttached.add(e);
+						if (!hasDebugInfoAttached.has(err)) {
+							err.message += `\nwhile serializing ${stackToString(value)}`;
+							hasDebugInfoAttached.add(err);
 						}
 					}
-					throw e;
+					throw err;
 				}
 			},
 			setCircularReference(ref) {
@@ -457,7 +489,7 @@ class ObjectMiddleware extends SerializerMiddleware {
 
 				if (cycleStack.has(item)) {
 					throw new Error(
-						`This is a circular references. To serialize circular references use 'setCircularReference' somewhere in the circle during serialize and deserialize.`
+						"This is a circular references. To serialize circular references use 'setCircularReference' somewhere in the circle during serialize and deserialize."
 					);
 				}
 
@@ -508,7 +540,7 @@ class ObjectMiddleware extends SerializerMiddleware {
 				result.push(item);
 			} else if (typeof item === "function") {
 				if (!SerializerMiddleware.isLazy(item))
-					throw new Error("Unexpected function " + item);
+					throw new Error(`Unexpected function ${item}`);
 				/** @type {SerializedType} */
 				const serializedData =
 					SerializerMiddleware.getLazySerializedValue(item);
@@ -539,10 +571,10 @@ class ObjectMiddleware extends SerializerMiddleware {
 				process(item);
 			}
 			return result;
-		} catch (e) {
-			if (e === NOT_SERIALIZABLE) return null;
+		} catch (err) {
+			if (err === NOT_SERIALIZABLE) return null;
 
-			throw e;
+			throw err;
 		} finally {
 			// Get rid of these references to avoid leaking memory
 			// This happens because the optimized code v8 generates
@@ -560,7 +592,7 @@ class ObjectMiddleware extends SerializerMiddleware {
 
 	/**
 	 * @param {SerializedType} data data
-	 * @param {Object} context context object
+	 * @param {object} context context object
 	 * @returns {DeserializedType|Promise<DeserializedType>} deserialized data
 	 */
 	deserialize(data, context) {
@@ -603,7 +635,7 @@ class ObjectMiddleware extends SerializerMiddleware {
 				if (nextItem === ESCAPE_ESCAPE_VALUE) {
 					return ESCAPE;
 				} else if (nextItem === ESCAPE_UNDEFINED) {
-					return undefined;
+					// Nothing
 				} else if (nextItem === ESCAPE_END_OBJECT) {
 					throw new Error(
 						`Unexpected end of object at position ${currentDataPos - 1}`
@@ -636,11 +668,9 @@ class ObjectMiddleware extends SerializerMiddleware {
 							if (request && !loadedRequests.has(request)) {
 								let loaded = false;
 								for (const [regExp, loader] of loaders) {
-									if (regExp.test(request)) {
-										if (loader(request)) {
-											loaded = true;
-											break;
-										}
+									if (regExp.test(request) && loader(request)) {
+										loaded = true;
+										break;
 									}
 								}
 								if (!loaded) {
@@ -687,10 +717,10 @@ class ObjectMiddleware extends SerializerMiddleware {
 						const name = !serializerEntry
 							? "unknown"
 							: !serializerEntry[1].request
-							? serializerEntry[0].name
-							: serializerEntry[1].name
-							? `${serializerEntry[1].request} ${serializerEntry[1].name}`
-							: serializerEntry[1].request;
+								? serializerEntry[0].name
+								: serializerEntry[1].name
+									? `${serializerEntry[1].request} ${serializerEntry[1].name}`
+									: serializerEntry[1].request;
 						err.message += `\n(during deserialization of ${name})`;
 						throw err;
 					}

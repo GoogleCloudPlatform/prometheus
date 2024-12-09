@@ -8,7 +8,7 @@
 const LazySet = require("../util/LazySet");
 const makeSerializable = require("../util/makeSerializable");
 
-/** @typedef {import("enhanced-resolve/lib/Resolver")} Resolver */
+/** @typedef {import("enhanced-resolve").Resolver} Resolver */
 /** @typedef {import("../CacheFacade").ItemCacheFacade} ItemCacheFacade */
 /** @typedef {import("../Compiler")} Compiler */
 /** @typedef {import("../FileSystemInfo")} FileSystemInfo */
@@ -50,7 +50,7 @@ const addAllToSet = (set, otherSet) => {
 };
 
 /**
- * @param {Object} object an object
+ * @param {object} object an object
  * @param {boolean} excludeContext if true, context is not included in string
  * @returns {string} stringified version
  */
@@ -59,11 +59,10 @@ const objectToString = (object, excludeContext) => {
 	for (const key in object) {
 		if (excludeContext && key === "context") continue;
 		const value = object[key];
-		if (typeof value === "object" && value !== null) {
-			str += `|${key}=[${objectToString(value, false)}|]`;
-		} else {
-			str += `|${key}=|${value}`;
-		}
+		str +=
+			typeof value === "object" && value !== null
+				? `|${key}=[${objectToString(value, false)}|]`
+				: `|${key}=|${value}`;
 	}
 	return str;
 };
@@ -104,9 +103,9 @@ class ResolverCachePlugin {
 		/**
 		 * @param {ItemCacheFacade} itemCache cache
 		 * @param {Resolver} resolver the resolver
-		 * @param {Object} resolveContext context for resolving meta info
-		 * @param {Object} request the request info object
-		 * @param {function((Error | null)=, Object=): void} callback callback function
+		 * @param {object} resolveContext context for resolving meta info
+		 * @param {object} request the request info object
+		 * @param {function((Error | null)=, object=): void} callback callback function
 		 * @returns {void}
 		 */
 		const doRealResolve = (
@@ -124,8 +123,11 @@ class ResolverCachePlugin {
 			const newResolveContext = {
 				...resolveContext,
 				stack: new Set(),
+				/** @type {LazySet<string>} */
 				missingDependencies: new LazySet(),
+				/** @type {LazySet<string>} */
 				fileDependencies: new LazySet(),
+				/** @type {LazySet<string>} */
 				contextDependencies: new LazySet()
 			};
 			let yieldResult;
@@ -185,16 +187,16 @@ class ResolverCachePlugin {
 		};
 		compiler.resolverFactory.hooks.resolver.intercept({
 			factory(type, hook) {
-				/** @type {Map<string, (function(Error=, Object=): void)[]>} */
+				/** @type {Map<string, (function(Error=, object=): void)[]>} */
 				const activeRequests = new Map();
-				/** @type {Map<string, [function(Error=, Object=): void, function(Error=, Object=): void][]>} */
+				/** @type {Map<string, [function(Error=, object=): void, function(Error=, object=): void][]>} */
 				const activeRequestsWithYield = new Map();
 				hook.tap(
 					"ResolverCachePlugin",
 					/**
 					 * @param {Resolver} resolver the resolver
-					 * @param {Object} options resolve options
-					 * @param {Object} userOptions resolve options passed by the user
+					 * @param {object} options resolve options
+					 * @param {object} userOptions resolve options passed by the user
 					 * @returns {void}
 					 */
 					(resolver, options, userOptions) => {
@@ -210,7 +212,10 @@ class ResolverCachePlugin {
 								stage: -100
 							},
 							(request, resolveContext, callback) => {
-								if (request._ResolverCachePluginCacheMiss || !fileSystemInfo) {
+								if (
+									/** @type {TODO} */ (request)._ResolverCachePluginCacheMiss ||
+									!fileSystemInfo
+								) {
 									return callback();
 								}
 								const withYield = typeof resolveContext.yield === "function";
@@ -222,7 +227,9 @@ class ResolverCachePlugin {
 									const activeRequest = activeRequestsWithYield.get(identifier);
 									if (activeRequest) {
 										activeRequest[0].push(callback);
-										activeRequest[1].push(resolveContext.yield);
+										activeRequest[1].push(
+											/** @type {TODO} */ (resolveContext.yield)
+										);
 										return;
 									}
 								} else {
@@ -233,7 +240,8 @@ class ResolverCachePlugin {
 									}
 								}
 								const itemCache = cache.getItemCache(identifier, null);
-								let callbacks, yields;
+								let callbacks;
+								let yields;
 								const done = withYield
 									? (err, result) => {
 											if (callbacks === undefined) {
@@ -261,7 +269,7 @@ class ResolverCachePlugin {
 												yields = undefined;
 												callbacks = false;
 											}
-									  }
+										}
 									: (err, result) => {
 											if (callbacks === undefined) {
 												callback(err, result);
@@ -273,7 +281,7 @@ class ResolverCachePlugin {
 												activeRequests.delete(identifier);
 												callbacks = false;
 											}
-									  };
+										};
 								/**
 								 * @param {Error=} err error if any
 								 * @param {CacheEntry=} cacheEntry cache entry
@@ -300,19 +308,22 @@ class ResolverCachePlugin {
 												cachedResolves++;
 												if (resolveContext.missingDependencies) {
 													addAllToSet(
-														resolveContext.missingDependencies,
+														/** @type {LazySet<string>} */
+														(resolveContext.missingDependencies),
 														snapshot.getMissingIterable()
 													);
 												}
 												if (resolveContext.fileDependencies) {
 													addAllToSet(
-														resolveContext.fileDependencies,
+														/** @type {LazySet<string>} */
+														(resolveContext.fileDependencies),
 														snapshot.getFileIterable()
 													);
 												}
 												if (resolveContext.contextDependencies) {
 													addAllToSet(
-														resolveContext.contextDependencies,
+														/** @type {LazySet<string>} */
+														(resolveContext.contextDependencies),
 														snapshot.getContextIterable()
 													);
 												}

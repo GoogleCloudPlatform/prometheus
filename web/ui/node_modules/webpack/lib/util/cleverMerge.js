@@ -23,26 +23,28 @@ const DYNAMIC_INFO = Symbol("cleverMerge dynamic info");
  *  // when same arguments passed, gets the result from WeakMap and returns it.
  * cachedCleverMerge({a: 1}, {a: 2})
  * {a: 2}
- * @param {T} first first object
- * @param {O} second second object
+ * @param {T | null | undefined} first first object
+ * @param {O | null | undefined} second second object
  * @returns {T & O | T | O} merged object of first and second object
  */
 const cachedCleverMerge = (first, second) => {
-	if (second === undefined) return first;
-	if (first === undefined) return second;
-	if (typeof second !== "object" || second === null) return second;
-	if (typeof first !== "object" || first === null) return first;
+	if (second === undefined) return /** @type {T} */ (first);
+	if (first === undefined) return /** @type {O} */ (second);
+	if (typeof second !== "object" || second === null)
+		return /** @type {O} */ (second);
+	if (typeof first !== "object" || first === null)
+		return /** @type {T} */ (first);
 
 	let innerCache = mergeCache.get(first);
 	if (innerCache === undefined) {
 		innerCache = new WeakMap();
 		mergeCache.set(first, innerCache);
 	}
-	const prevMerge = innerCache.get(second);
+	const prevMerge = /** @type {T & O} */ (innerCache.get(second));
 	if (prevMerge !== undefined) return prevMerge;
 	const newMerge = _cleverMerge(first, second, true);
 	innerCache.set(second, newMerge);
-	return newMerge;
+	return /** @type {T & O} */ (newMerge);
 };
 
 /**
@@ -69,7 +71,7 @@ const cachedSetProperty = (obj, property, value) => {
 
 	let result = mapByValue.get(value);
 
-	if (result) return result;
+	if (result) return /** @type {T} */ (result);
 
 	result = {
 		...obj,
@@ -77,18 +79,18 @@ const cachedSetProperty = (obj, property, value) => {
 	};
 	mapByValue.set(value, result);
 
-	return result;
+	return /** @type {T} */ (result);
 };
 
 /**
- * @typedef {Object} ObjectParsedPropertyEntry
+ * @typedef {object} ObjectParsedPropertyEntry
  * @property {any | undefined} base base value
  * @property {string | undefined} byProperty the name of the selector property
  * @property {Map<string, any>} byValues value depending on selector property, merged with base
  */
 
 /**
- * @typedef {Object} ParsedObject
+ * @typedef {object} ParsedObject
  * @property {Map<string, ObjectParsedPropertyEntry>} static static properties (key is property name)
  * @property {{ byProperty: string, fn: Function } | undefined} dynamic dynamic part
  */
@@ -229,7 +231,7 @@ const getValueType = value => {
 	} else if (value === DELETE) {
 		return VALUE_TYPE_DELETE;
 	} else if (Array.isArray(value)) {
-		if (value.lastIndexOf("...") !== -1) return VALUE_TYPE_ARRAY_EXTEND;
+		if (value.includes("...")) return VALUE_TYPE_ARRAY_EXTEND;
 		return VALUE_TYPE_ATOM;
 	} else if (
 		typeof value === "object" &&
@@ -257,7 +259,7 @@ const cleverMerge = (first, second) => {
 	if (typeof second !== "object" || second === null) return second;
 	if (typeof first !== "object" || first === null) return first;
 
-	return _cleverMerge(first, second, false);
+	return /** @type {T & O} */ (_cleverMerge(first, second, false));
 };
 
 /**
@@ -457,8 +459,8 @@ const mergeSingleValue = (a, b, internalCaching) => {
 			return aType !== VALUE_TYPE_OBJECT
 				? b
 				: internalCaching
-				? cachedCleverMerge(a, b)
-				: cleverMerge(a, b);
+					? cachedCleverMerge(a, b)
+					: cleverMerge(a, b);
 		}
 		case VALUE_TYPE_UNDEFINED:
 			return a;
@@ -467,8 +469,8 @@ const mergeSingleValue = (a, b, internalCaching) => {
 				aType !== VALUE_TYPE_ATOM
 					? aType
 					: Array.isArray(a)
-					? VALUE_TYPE_ARRAY_EXTEND
-					: VALUE_TYPE_OBJECT
+						? VALUE_TYPE_ARRAY_EXTEND
+						: VALUE_TYPE_OBJECT
 			) {
 				case VALUE_TYPE_UNDEFINED:
 					return b;
@@ -498,27 +500,40 @@ const mergeSingleValue = (a, b, internalCaching) => {
 };
 
 /**
- * @template T
+ * @template {object} T
  * @param {T} obj the object
+ * @param {(keyof T)[]=} keysToKeepOriginalValue keys to keep original value
  * @returns {T} the object without operations like "..." or DELETE
  */
-const removeOperations = obj => {
+const removeOperations = (obj, keysToKeepOriginalValue = []) => {
 	const newObj = /** @type {T} */ ({});
 	for (const key of Object.keys(obj)) {
-		const value = obj[key];
+		const value = obj[/** @type {keyof T} */ (key)];
 		const type = getValueType(value);
+		if (
+			type === VALUE_TYPE_OBJECT &&
+			keysToKeepOriginalValue.includes(/** @type {keyof T} */ (key))
+		) {
+			newObj[/** @type {keyof T} */ (key)] = value;
+			continue;
+		}
 		switch (type) {
 			case VALUE_TYPE_UNDEFINED:
 			case VALUE_TYPE_DELETE:
 				break;
 			case VALUE_TYPE_OBJECT:
-				newObj[key] = removeOperations(value);
+				newObj[key] = removeOperations(
+					/** @type {TODO} */ (value),
+					keysToKeepOriginalValue
+				);
 				break;
 			case VALUE_TYPE_ARRAY_EXTEND:
-				newObj[key] = value.filter(i => i !== "...");
+				newObj[key] =
+					/** @type {any[]} */
+					(value).filter(i => i !== "...");
 				break;
 			default:
-				newObj[key] = value;
+				newObj[/** @type {keyof T} */ (key)] = value;
 				break;
 		}
 	}
@@ -537,21 +552,21 @@ const resolveByProperty = (obj, byProperty, ...values) => {
 	if (typeof obj !== "object" || obj === null || !(byProperty in obj)) {
 		return obj;
 	}
-	const { [byProperty]: _byValue, ..._remaining } = /** @type {object} */ (obj);
+	const { [byProperty]: _byValue, ..._remaining } = obj;
 	const remaining = /** @type {T} */ (_remaining);
-	const byValue = /** @type {Record<string, T> | function(...any[]): T} */ (
-		_byValue
-	);
+	const byValue =
+		/** @type {Record<string, T> | function(...any[]): T} */
+		(_byValue);
 	if (typeof byValue === "object") {
 		const key = values[0];
 		if (key in byValue) {
 			return cachedCleverMerge(remaining, byValue[key]);
 		} else if ("default" in byValue) {
 			return cachedCleverMerge(remaining, byValue.default);
-		} else {
-			return /** @type {T} */ (remaining);
 		}
+		return remaining;
 	} else if (typeof byValue === "function") {
+		// eslint-disable-next-line prefer-spread
 		const result = byValue.apply(null, values);
 		return cachedCleverMerge(
 			remaining,
@@ -560,9 +575,9 @@ const resolveByProperty = (obj, byProperty, ...values) => {
 	}
 };
 
-exports.cachedSetProperty = cachedSetProperty;
-exports.cachedCleverMerge = cachedCleverMerge;
-exports.cleverMerge = cleverMerge;
-exports.resolveByProperty = resolveByProperty;
-exports.removeOperations = removeOperations;
-exports.DELETE = DELETE;
+module.exports.cachedSetProperty = cachedSetProperty;
+module.exports.cachedCleverMerge = cachedCleverMerge;
+module.exports.cleverMerge = cleverMerge;
+module.exports.resolveByProperty = resolveByProperty;
+module.exports.removeOperations = removeOperations;
+module.exports.DELETE = DELETE;

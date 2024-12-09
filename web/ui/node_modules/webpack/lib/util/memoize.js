@@ -13,19 +13,19 @@
  */
 const memoize = fn => {
 	let cache = false;
-	/** @type {T} */
-	let result = undefined;
+	/** @type {T | undefined} */
+	let result;
 	return () => {
 		if (cache) {
-			return result;
-		} else {
-			result = fn();
-			cache = true;
-			// Allow to clean up memory for fn
-			// and all dependent resources
-			fn = undefined;
-			return result;
+			return /** @type {T} */ (result);
 		}
+
+		result = fn();
+		cache = true;
+		// Allow to clean up memory for fn
+		// and all dependent resources
+		fn = undefined;
+		return /** @type {T} */ (result);
 	};
 };
 

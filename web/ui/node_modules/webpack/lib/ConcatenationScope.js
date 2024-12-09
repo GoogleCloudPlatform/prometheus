@@ -14,13 +14,13 @@ const DEFAULT_EXPORT = "__WEBPACK_DEFAULT_EXPORT__";
 const NAMESPACE_OBJECT_EXPORT = "__WEBPACK_NAMESPACE_OBJECT__";
 
 /**
- * @typedef {Object} ExternalModuleInfo
+ * @typedef {object} ExternalModuleInfo
  * @property {number} index
  * @property {Module} module
  */
 
 /**
- * @typedef {Object} ConcatenatedModuleInfo
+ * @typedef {object} ConcatenatedModuleInfo
  * @property {number} index
  * @property {Module} module
  * @property {Map<string, string>} exportMap mapping from export name to symbol
@@ -31,7 +31,7 @@ const NAMESPACE_OBJECT_EXPORT = "__WEBPACK_NAMESPACE_OBJECT__";
 /** @typedef {ConcatenatedModuleInfo | ExternalModuleInfo} ModuleInfo */
 
 /**
- * @typedef {Object} ModuleReferenceOptions
+ * @typedef {object} ModuleReferenceOptions
  * @property {string[]} ids the properties/exports of the module
  * @property {boolean} call true, when this referenced export is called
  * @property {boolean} directImport true, when this referenced export is directly imported (not via property access)
@@ -64,7 +64,6 @@ class ConcatenationScope {
 	}
 
 	/**
-	 *
 	 * @param {string} exportName name of the export
 	 * @param {string} symbol identifier of the export in source code
 	 */
@@ -78,7 +77,6 @@ class ConcatenationScope {
 	}
 
 	/**
-	 *
 	 * @param {string} exportName name of the export
 	 * @param {string} expression expression to be used
 	 */
@@ -99,7 +97,6 @@ class ConcatenationScope {
 	}
 
 	/**
-	 *
 	 * @param {Module} module the referenced module
 	 * @param {Partial<ModuleReferenceOptions>} options options
 	 * @returns {string} the reference as identifier
@@ -108,14 +105,14 @@ class ConcatenationScope {
 		module,
 		{ ids = undefined, call = false, directImport = false, asiSafe = false }
 	) {
-		const info = this._modulesMap.get(module);
+		const info = /** @type {ModuleInfo} */ (this._modulesMap.get(module));
 		const callFlag = call ? "_call" : "";
 		const directImportFlag = directImport ? "_directImport" : "";
 		const asiSafeFlag = asiSafe
 			? "_asiSafe1"
 			: asiSafe === false
-			? "_asiSafe0"
-			: "";
+				? "_asiSafe0"
+				: "";
 		const exportData = ids
 			? Buffer.from(JSON.stringify(ids), "utf-8").toString("hex")
 			: "ns";
@@ -133,12 +130,12 @@ class ConcatenationScope {
 
 	/**
 	 * @param {string} name the identifier
-	 * @returns {ModuleReferenceOptions & { index: number }} parsed options and index
+	 * @returns {ModuleReferenceOptions & { index: number } | null} parsed options and index
 	 */
 	static matchModuleReference(name) {
 		const match = MODULE_REFERENCE_REGEXP.exec(name);
 		if (!match) return null;
-		const index = +match[1];
+		const index = Number(match[1]);
 		const asiSafe = match[5];
 		return {
 			index,
@@ -146,8 +143,8 @@ class ConcatenationScope {
 				match[2] === "ns"
 					? []
 					: JSON.parse(Buffer.from(match[2], "hex").toString("utf-8")),
-			call: !!match[3],
-			directImport: !!match[4],
+			call: Boolean(match[3]),
+			directImport: Boolean(match[4]),
 			asiSafe: asiSafe ? asiSafe === "1" : undefined
 		};
 	}

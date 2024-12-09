@@ -87,7 +87,7 @@ class LazySet {
 
 	/**
 	 * @param {T} item an item
-	 * @returns {this} itself
+	 * @returns {LazySet<T>} itself
 	 */
 	add(item) {
 		this._set.add(item);
@@ -96,7 +96,7 @@ class LazySet {
 
 	/**
 	 * @param {Iterable<T> | LazySet<T>} iterable a immutable iterable or another immutable LazySet which will eventually be merged into the Set
-	 * @returns {this} itself
+	 * @returns {LazySet<T>} itself
 	 */
 	addAll(iterable) {
 		if (this._deopt) {
@@ -152,6 +152,7 @@ class LazySet {
 	forEach(callbackFn, thisArg) {
 		this._deopt = true;
 		if (this._needMerge) this._merge();
+		// eslint-disable-next-line unicorn/no-array-for-each
 		this._set.forEach(callbackFn, thisArg);
 	}
 
@@ -187,12 +188,20 @@ class LazySet {
 		return "LazySet";
 	}
 
+	/**
+	 * @param {import("../serialization/ObjectMiddleware").ObjectSerializerContext} context context
+	 */
 	serialize({ write }) {
 		if (this._needMerge) this._merge();
 		write(this._set.size);
 		for (const item of this._set) write(item);
 	}
 
+	/**
+	 * @template T
+	 * @param {import("../serialization/ObjectMiddleware").ObjectDeserializerContext} context context
+	 * @returns {LazySet<T>} lazy set
+	 */
 	static deserialize({ read }) {
 		const count = read();
 		const items = [];

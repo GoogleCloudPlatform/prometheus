@@ -7,6 +7,7 @@
 
 const { OriginalSource, RawSource } = require("webpack-sources");
 const Module = require("./Module");
+const { JAVASCRIPT_MODULE_TYPE_DYNAMIC } = require("./ModuleTypeConstants");
 const RuntimeGlobals = require("./RuntimeGlobals");
 const DelegatedSourceDependency = require("./dependencies/DelegatedSourceDependency");
 const StaticExportsDependency = require("./dependencies/StaticExportsDependency");
@@ -24,13 +25,20 @@ const makeSerializable = require("./util/makeSerializable");
 /** @typedef {import("./Module").LibIdentOptions} LibIdentOptions */
 /** @typedef {import("./Module").NeedBuildContext} NeedBuildContext */
 /** @typedef {import("./Module").SourceContext} SourceContext */
+/** @typedef {import("./Module").SourceTypes} SourceTypes */
 /** @typedef {import("./RequestShortener")} RequestShortener */
 /** @typedef {import("./ResolverFactory").ResolverWithOptions} ResolverWithOptions */
 /** @typedef {import("./RuntimeTemplate")} RuntimeTemplate */
 /** @typedef {import("./WebpackError")} WebpackError */
 /** @typedef {import("./dependencies/ModuleDependency")} ModuleDependency */
+/** @typedef {import("./serialization/ObjectMiddleware").ObjectDeserializerContext} ObjectDeserializerContext */
+/** @typedef {import("./serialization/ObjectMiddleware").ObjectSerializerContext} ObjectSerializerContext */
 /** @typedef {import("./util/Hash")} Hash */
 /** @typedef {import("./util/fs").InputFileSystem} InputFileSystem */
+
+/** @typedef {string} SourceRequest */
+/** @typedef {"require" | "object"} Type */
+/** @typedef {TODO} Data */
 
 const TYPES = new Set(["javascript"]);
 const RUNTIME_REQUIREMENTS = new Set([
@@ -39,8 +47,15 @@ const RUNTIME_REQUIREMENTS = new Set([
 ]);
 
 class DelegatedModule extends Module {
+	/**
+	 * @param {SourceRequest} sourceRequest source request
+	 * @param {Data} data data
+	 * @param {Type} type type
+	 * @param {string} userRequest user request
+	 * @param {string | Module} originalRequest original request
+	 */
 	constructor(sourceRequest, data, type, userRequest, originalRequest) {
-		super("javascript/dynamic", null);
+		super(JAVASCRIPT_MODULE_TYPE_DYNAMIC, null);
 
 		// Info from Factory
 		this.sourceRequest = sourceRequest;
@@ -48,7 +63,7 @@ class DelegatedModule extends Module {
 		this.delegationType = type;
 		this.userRequest = userRequest;
 		this.originalRequest = originalRequest;
-		/** @type {ManifestModuleData} */
+		/** @type {ManifestModuleData | undefined} */
 		this.delegateData = data;
 
 		// Build info
@@ -56,7 +71,7 @@ class DelegatedModule extends Module {
 	}
 
 	/**
-	 * @returns {Set<string>} types available (do not mutate)
+	 * @returns {SourceTypes} types available (do not mutate)
 	 */
 	getSourceTypes() {
 		return TYPES;
@@ -107,7 +122,8 @@ class DelegatedModule extends Module {
 	 * @returns {void}
 	 */
 	build(options, compilation, resolver, fs, callback) {
-		this.buildMeta = { ...this.delegateData.buildMeta };
+		const delegateData = /** @type {ManifestModuleData} */ (this.delegateData);
+		this.buildMeta = { ...delegateData.buildMeta };
 		this.buildInfo = {};
 		this.dependencies.length = 0;
 		this.delegatedSourceDependency = new DelegatedSourceDependency(
@@ -115,7 +131,7 @@ class DelegatedModule extends Module {
 		);
 		this.addDependency(this.delegatedSourceDependency);
 		this.addDependency(
-			new StaticExportsDependency(this.delegateData.exports || true, false)
+			new StaticExportsDependency(delegateData.exports || true, false)
 		);
 		callback();
 	}
@@ -185,6 +201,9 @@ class DelegatedModule extends Module {
 		super.updateHash(hash, context);
 	}
 
+	/**
+	 * @param {ObjectSerializerContext} context context
+	 */
 	serialize(context) {
 		const { write } = context;
 		// constructor
@@ -196,6 +215,10 @@ class DelegatedModule extends Module {
 		super.serialize(context);
 	}
 
+	/**
+	 * @param {ObjectDeserializerContext} context context\
+	 * @returns {DelegatedModule} DelegatedModule
+	 */
 	static deserialize(context) {
 		const { read } = context;
 		const obj = new DelegatedModule(

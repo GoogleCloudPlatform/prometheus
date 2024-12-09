@@ -7,12 +7,13 @@
 
 const Dependency = require("../Dependency");
 const DependencyTemplate = require("../DependencyTemplate");
-const memoize = require("../util/memoize");
+const RawModule = require("../RawModule");
 
 /** @typedef {import("../Dependency").TRANSITIVE} TRANSITIVE */
 /** @typedef {import("../Module")} Module */
-
-const getRawModule = memoize(() => require("../RawModule"));
+/** @typedef {import("../javascript/JavascriptParser").ImportAttributes} ImportAttributes */
+/** @typedef {import("../serialization/ObjectMiddleware").ObjectDeserializerContext} ObjectDeserializerContext */
+/** @typedef {import("../serialization/ObjectMiddleware").ObjectSerializerContext} ObjectSerializerContext */
 
 class ModuleDependency extends Dependency {
 	/**
@@ -23,8 +24,9 @@ class ModuleDependency extends Dependency {
 		this.request = request;
 		this.userRequest = request;
 		this.range = undefined;
+		// TODO move it to subclasses and rename
 		// assertions must be serialized by subclasses that use it
-		/** @type {Record<string, any> | undefined} */
+		/** @type {ImportAttributes | undefined} */
 		this.assertions = undefined;
 		this._context = undefined;
 	}
@@ -56,10 +58,9 @@ class ModuleDependency extends Dependency {
 
 	/**
 	 * @param {string} context context directory
-	 * @returns {Module} a module
+	 * @returns {Module | null} a module
 	 */
 	createIgnoredModule(context) {
-		const RawModule = getRawModule();
 		return new RawModule(
 			"/* (ignored) */",
 			`ignored|${context}|${this.request}`,
@@ -67,6 +68,9 @@ class ModuleDependency extends Dependency {
 		);
 	}
 
+	/**
+	 * @param {ObjectSerializerContext} context context
+	 */
 	serialize(context) {
 		const { write } = context;
 		write(this.request);
@@ -76,6 +80,9 @@ class ModuleDependency extends Dependency {
 		super.serialize(context);
 	}
 
+	/**
+	 * @param {ObjectDeserializerContext} context context
+	 */
 	deserialize(context) {
 		const { read } = context;
 		this.request = read();

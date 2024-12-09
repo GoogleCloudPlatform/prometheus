@@ -7,9 +7,16 @@
 
 const util = require("util");
 const ExternalModule = require("./ExternalModule");
+const ContextElementDependency = require("./dependencies/ContextElementDependency");
+const CssImportDependency = require("./dependencies/CssImportDependency");
+const HarmonyImportDependency = require("./dependencies/HarmonyImportDependency");
+const ImportDependency = require("./dependencies/ImportDependency");
 const { resolveByProperty, cachedSetProperty } = require("./util/cleverMerge");
 
 /** @typedef {import("../declarations/WebpackOptions").Externals} Externals */
+/** @typedef {import("./Compilation").DepConstructor} DepConstructor */
+/** @typedef {import("./ExternalModule").DependencyMeta} DependencyMeta */
+/** @typedef {import("./Module")} Module */
 /** @typedef {import("./NormalModuleFactory")} NormalModuleFactory */
 
 const UNSPECIFIED_EXTERNAL_TYPE_REGEXP = /^[a-z0-9-]+ /;
@@ -18,6 +25,7 @@ const EMPTY_RESOLVE_OPTIONS = {};
 // TODO webpack 6 remove this
 const callDeprecatedExternals = util.deprecate(
 	(externalsFunction, context, request, cb) => {
+		// eslint-disable-next-line no-useless-call
 		externalsFunction.call(null, context, request, cb);
 	},
 	"The externals-function should be defined like ({context, request}, cb) => { ... }",
@@ -26,6 +34,11 @@ const callDeprecatedExternals = util.deprecate(
 
 const cache = new WeakMap();
 
+/**
+ * @param {object} obj obj
+ * @param {TODO} layer layer
+ * @returns {object} result
+ */
 const resolveLayer = (obj, layer) => {
 	let map = cache.get(obj);
 	if (map === undefined) {
@@ -39,6 +52,9 @@ const resolveLayer = (obj, layer) => {
 	map.set(layer, result);
 	return result;
 };
+
+/** @typedef {string|string[]|boolean|Record<string, string|string[]>} ExternalValue */
+/** @typedef {string|undefined} ExternalType */
 
 class ExternalModuleFactoryPlugin {
 	/**
@@ -65,9 +81,9 @@ class ExternalModuleFactoryPlugin {
 				const dependencyType = data.dependencyType;
 
 				/**
-				 * @param {string|string[]|boolean|Record<string, string|string[]>} value the external config
-				 * @param {string|undefined} type type of external
-				 * @param {function(Error=, ExternalModule=): void} callback callback
+				 * @param {ExternalValue} value the external config
+				 * @param {ExternalType | undefined} type type of external
+				 * @param {function((Error | null)=, ExternalModule=): void} callback callback
 				 * @returns {void}
 				 */
 				const handleExternal = (value, type, callback) => {
@@ -76,12 +92,7 @@ class ExternalModuleFactoryPlugin {
 						return callback();
 					}
 					/** @type {string | string[] | Record<string, string|string[]>} */
-					let externalConfig;
-					if (value === true) {
-						externalConfig = dependency.request;
-					} else {
-						externalConfig = value;
-					}
+					let externalConfig = value === true ? dependency.request : value;
 					// When no explicit type is specified, extract it from the externalConfig
 					if (type === undefined) {
 						if (
@@ -105,12 +116,43 @@ class ExternalModuleFactoryPlugin {
 							];
 						}
 					}
+
+					// TODO make it pluggable/add hooks to `ExternalModule` to allow output modules own externals?
+					/** @type {DependencyMeta | undefined} */
+					let dependencyMeta;
+
+					if (
+						dependency instanceof HarmonyImportDependency ||
+						dependency instanceof ImportDependency ||
+						dependency instanceof ContextElementDependency
+					) {
+						const externalType =
+							dependency instanceof HarmonyImportDependency
+								? "module"
+								: dependency instanceof ImportDependency
+									? "import"
+									: undefined;
+
+						dependencyMeta = {
+							attributes: dependency.assertions,
+							externalType
+						};
+					} else if (dependency instanceof CssImportDependency) {
+						dependencyMeta = {
+							layer: dependency.layer,
+							supports: dependency.supports,
+							media: dependency.media
+						};
+					}
+
 					callback(
 						null,
 						new ExternalModule(
 							externalConfig,
-							type || globalType,
-							dependency.request
+							/** @type {string} */
+							(type || globalType),
+							dependency.request,
+							dependencyMeta
 						)
 					);
 				};
@@ -128,7 +170,13 @@ class ExternalModuleFactoryPlugin {
 					} else if (Array.isArray(externals)) {
 						let i = 0;
 						const next = () => {
+							/** @type {boolean | undefined} */
 							let asyncFlag;
+							/**
+							 * @param {(Error | null)=} err err
+							 * @param {ExternalModule=} module module
+							 * @returns {void}
+							 */
 							const handleExternalsAndCallback = (err, module) => {
 								if (err) return callback(err);
 								if (!module) {
@@ -192,7 +240,7 @@ class ExternalModuleFactoryPlugin {
 														data.resolveOptions || EMPTY_RESOLVE_OPTIONS,
 														"dependencyType",
 														dependencyType
-												  )
+													)
 												: data.resolveOptions
 										);
 										if (options) resolver = resolver.withOptions(options);

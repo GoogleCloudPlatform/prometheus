@@ -14,38 +14,42 @@ const NullDependency = require("./NullDependency");
 /** @typedef {import("../Dependency").UpdateHashContext} UpdateHashContext */
 /** @typedef {import("../ModuleGraph")} ModuleGraph */
 /** @typedef {import("../json/JsonData")} JsonData */
+/** @typedef {import("../json/JsonData").RawJsonData} RawJsonData */
+/** @typedef {import("../serialization/ObjectMiddleware").ObjectDeserializerContext} ObjectDeserializerContext */
+/** @typedef {import("../serialization/ObjectMiddleware").ObjectSerializerContext} ObjectSerializerContext */
 /** @typedef {import("../util/Hash")} Hash */
 
+/**
+ * @param {RawJsonData} data data
+ * @returns {TODO} value
+ */
 const getExportsFromData = data => {
 	if (data && typeof data === "object") {
 		if (Array.isArray(data)) {
 			return data.length < 100
-				? data.map((item, idx) => {
-						return {
-							name: `${idx}`,
-							canMangle: true,
-							exports: getExportsFromData(item)
-						};
-				  })
+				? data.map((item, idx) => ({
+						name: `${idx}`,
+						canMangle: true,
+						exports: getExportsFromData(item)
+					}))
 				: undefined;
-		} else {
-			const exports = [];
-			for (const key of Object.keys(data)) {
-				exports.push({
-					name: key,
-					canMangle: true,
-					exports: getExportsFromData(data[key])
-				});
-			}
-			return exports;
 		}
+		const exports = [];
+		for (const key of Object.keys(data)) {
+			exports.push({
+				name: key,
+				canMangle: true,
+				exports: getExportsFromData(data[key])
+			});
+		}
+		return exports;
 	}
 	return undefined;
 };
 
 class JsonExportsDependency extends NullDependency {
 	/**
-	 * @param {JsonData=} data json data
+	 * @param {JsonData} data json data
 	 */
 	constructor(data) {
 		super();
@@ -63,7 +67,9 @@ class JsonExportsDependency extends NullDependency {
 	 */
 	getExports(moduleGraph) {
 		return {
-			exports: getExportsFromData(this.data && this.data.get()),
+			exports: getExportsFromData(
+				this.data && /** @type {RawJsonData} */ (this.data.get())
+			),
 			dependencies: undefined
 		};
 	}
@@ -78,12 +84,18 @@ class JsonExportsDependency extends NullDependency {
 		this.data.updateHash(hash);
 	}
 
+	/**
+	 * @param {ObjectSerializerContext} context context
+	 */
 	serialize(context) {
 		const { write } = context;
 		write(this.data);
 		super.serialize(context);
 	}
 
+	/**
+	 * @param {ObjectDeserializerContext} context context
+	 */
 	deserialize(context) {
 		const { read } = context;
 		this.data = read();

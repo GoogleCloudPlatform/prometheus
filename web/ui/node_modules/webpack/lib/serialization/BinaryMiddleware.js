@@ -21,6 +21,9 @@ Section -> NullsSection |
 					 I32NumbersSection |
 					 I8NumbersSection |
 					 ShortStringSection |
+					 BigIntSection |
+					 I32BigIntSection |
+					 I8BigIntSection
 					 StringSection |
 					 BufferSection |
 					 NopSection
@@ -39,6 +42,9 @@ ShortStringSection -> ShortStringSectionHeaderByte ascii-byte*
 StringSection -> StringSectionHeaderByte i32:length utf8-byte*
 BufferSection -> BufferSectionHeaderByte i32:length byte*
 NopSection --> NopSectionHeaderByte
+BigIntSection -> BigIntSectionHeaderByte i32:length ascii-byte*
+I32BigIntSection -> I32BigIntSectionHeaderByte i32
+I8BigIntSection -> I8BigIntSectionHeaderByte i8
 
 ShortStringSectionHeaderByte -> 0b1nnn_nnnn (n:length)
 
@@ -58,6 +64,9 @@ BooleansCountAndBitsByte ->
 StringSectionHeaderByte -> 0b0000_1110
 BufferSectionHeaderByte -> 0b0000_1111
 NopSectionHeaderByte -> 0b0000_1011
+BigIntSectionHeaderByte -> 0b0001_1010
+I32BigIntSectionHeaderByte -> 0b0001_1100
+I8BigIntSectionHeaderByte -> 0b0001_1011
 FalseHeaderByte -> 0b0000_1100
 TrueHeaderByte -> 0b0000_1101
 
@@ -78,6 +87,9 @@ const NULL_AND_I8_HEADER = 0x15;
 const NULL_AND_I32_HEADER = 0x16;
 const NULL_AND_TRUE_HEADER = 0x17;
 const NULL_AND_FALSE_HEADER = 0x18;
+const BIGINT_HEADER = 0x1a;
+const BIGINT_I8_HEADER = 0x1b;
+const BIGINT_I32_HEADER = 0x1c;
 const STRING_HEADER = 0x1e;
 const BUFFER_HEADER = 0x1f;
 const I8_HEADER = 0x60;
@@ -86,7 +98,7 @@ const F64_HEADER = 0x20;
 const SHORT_STRING_HEADER = 0x80;
 
 /** Uplift high-order bits */
-const NUMBERS_HEADER_MASK = 0xe0;
+const NUMBERS_HEADER_MASK = 0xe0; // 0b1010_0000
 const NUMBERS_COUNT_MASK = 0x1f; // 0b0001_1111
 const SHORT_STRING_LENGTH_MASK = 0x7f; // 0b0111_1111
 
@@ -101,11 +113,25 @@ const MEASURE_END_OPERATION = Symbol("MEASURE_END_OPERATION");
 /** @typedef {typeof MEASURE_START_OPERATION} MEASURE_START_OPERATION_TYPE */
 /** @typedef {typeof MEASURE_END_OPERATION} MEASURE_END_OPERATION_TYPE */
 
+/**
+ * @param {number} n number
+ * @returns {0 | 1 | 2} type of number for serialization
+ */
 const identifyNumber = n => {
 	if (n === (n | 0)) {
 		if (n <= 127 && n >= -128) return 0;
 		if (n <= 2147483647 && n >= -2147483648) return 1;
 	}
+	return 2;
+};
+
+/**
+ * @param {bigint} n bigint
+ * @returns {0 | 1 | 2} type of bigint for serialization
+ */
+const identifyBigInt = n => {
+	if (n <= BigInt(127) && n >= BigInt(-128)) return 0;
+	if (n <= BigInt(2147483647) && n >= BigInt(-2147483648)) return 1;
 	return 2;
 };
 
@@ -117,13 +143,18 @@ const identifyNumber = n => {
 class BinaryMiddleware extends SerializerMiddleware {
 	/**
 	 * @param {DeserializedType} data data
-	 * @param {Object} context context object
+	 * @param {object} context context object
 	 * @returns {SerializedType|Promise<SerializedType>} serialized data
 	 */
 	serialize(data, context) {
 		return this._serialize(data, context);
 	}
 
+	/**
+	 * @param {function(): Promise<any> | any} fn lazy function
+	 * @param {object} context serialize function
+	 * @returns {function(): Promise<any> | any} new lazy
+	 */
 	_serializeLazy(fn, context) {
 		return SerializerMiddleware.serializeLazy(fn, data =>
 			this._serialize(data, context)
@@ -132,7 +163,7 @@ class BinaryMiddleware extends SerializerMiddleware {
 
 	/**
 	 * @param {DeserializedType} data data
-	 * @param {Object} context context object
+	 * @param {object} context context object
 	 * @param {{ leftOverBuffer: Buffer | null, allocationSize: number, increaseCounter: number }} allocationScope allocation scope
 	 * @returns {SerializedType} serialized data
 	 */
@@ -145,17 +176,20 @@ class BinaryMiddleware extends SerializerMiddleware {
 			leftOverBuffer: null
 		}
 	) {
-		/** @type {Buffer} */
+		/** @type {Buffer | null} */
 		let leftOverBuffer = null;
 		/** @type {BufferSerializableType[]} */
 		let buffers = [];
-		/** @type {Buffer} */
+		/** @type {Buffer | null} */
 		let currentBuffer = allocationScope ? allocationScope.leftOverBuffer : null;
 		allocationScope.leftOverBuffer = null;
 		let currentPosition = 0;
 		if (currentBuffer === null) {
 			currentBuffer = Buffer.allocUnsafe(allocationScope.allocationSize);
 		}
+		/**
+		 * @param {number} bytesNeeded bytes needed
+		 */
 		const allocate = bytesNeeded => {
 			if (currentBuffer !== null) {
 				if (currentBuffer.length - currentPosition >= bytesNeeded) return;
@@ -203,20 +237,32 @@ class BinaryMiddleware extends SerializerMiddleware {
 				currentPosition = 0;
 			}
 		};
+		/**
+		 * @param {number} byte byte
+		 */
 		const writeU8 = byte => {
-			currentBuffer.writeUInt8(byte, currentPosition++);
+			/** @type {Buffer} */
+			(currentBuffer).writeUInt8(byte, currentPosition++);
 		};
+		/**
+		 * @param {number} ui32 ui32
+		 */
 		const writeU32 = ui32 => {
-			currentBuffer.writeUInt32LE(ui32, currentPosition);
+			/** @type {Buffer} */
+			(currentBuffer).writeUInt32LE(ui32, currentPosition);
 			currentPosition += 4;
 		};
+		/** @type {number[]} */
 		const measureStack = [];
 		const measureStart = () => {
 			measureStack.push(buffers.length, currentPosition);
 		};
+		/**
+		 * @returns {number} size
+		 */
 		const measureEnd = () => {
-			const oldPos = measureStack.pop();
-			const buffersIndex = measureStack.pop();
+			const oldPos = /** @type {number} */ (measureStack.pop());
+			const buffersIndex = /** @type {number} */ (measureStack.pop());
 			let size = currentPosition - oldPos;
 			for (let i = buffersIndex; i < buffers.length; i++) {
 				size += buffers[i].length;
@@ -228,7 +274,7 @@ class BinaryMiddleware extends SerializerMiddleware {
 			switch (typeof thing) {
 				case "function": {
 					if (!SerializerMiddleware.isLazy(thing))
-						throw new Error("Unexpected function " + thing);
+						throw new Error(`Unexpected function ${thing}`);
 					/** @type {SerializedType | (() => SerializedType)} */
 					let serializedData =
 						SerializerMiddleware.getLazySerializedValue(thing);
@@ -251,13 +297,12 @@ class BinaryMiddleware extends SerializerMiddleware {
 							buffers.push(serializedData);
 							break;
 						}
-					} else {
-						if (typeof serializedData === "function") {
-							flush();
-							buffers.push(serializedData);
-							break;
-						}
+					} else if (typeof serializedData === "function") {
+						flush();
+						buffers.push(serializedData);
+						break;
 					}
+					/** @type {number[]} */
 					const lengths = [];
 					for (const item of serializedData) {
 						let last;
@@ -312,6 +357,62 @@ class BinaryMiddleware extends SerializerMiddleware {
 
 						for (let i = 0; i < len; i++) {
 							currentBuffer[currentPosition++] = thing.charCodeAt(i);
+						}
+					}
+					break;
+				}
+				case "bigint": {
+					const type = identifyBigInt(thing);
+					if (type === 0 && thing >= 0 && thing <= BigInt(10)) {
+						// shortcut for very small bigints
+						allocate(HEADER_SIZE + I8_SIZE);
+						writeU8(BIGINT_I8_HEADER);
+						writeU8(Number(thing));
+						break;
+					}
+
+					switch (type) {
+						case 0: {
+							let n = 1;
+							allocate(HEADER_SIZE + I8_SIZE * n);
+							writeU8(BIGINT_I8_HEADER | (n - 1));
+							while (n > 0) {
+								currentBuffer.writeInt8(
+									Number(/** @type {bigint} */ (data[i])),
+									currentPosition
+								);
+								currentPosition += I8_SIZE;
+								n--;
+								i++;
+							}
+							i--;
+							break;
+						}
+						case 1: {
+							let n = 1;
+							allocate(HEADER_SIZE + I32_SIZE * n);
+							writeU8(BIGINT_I32_HEADER | (n - 1));
+							while (n > 0) {
+								currentBuffer.writeInt32LE(
+									Number(/** @type {bigint} */ (data[i])),
+									currentPosition
+								);
+								currentPosition += I32_SIZE;
+								n--;
+								i++;
+							}
+							i--;
+							break;
+						}
+						default: {
+							const value = thing.toString();
+							const len = Buffer.byteLength(value);
+							allocate(len + HEADER_SIZE + I32_SIZE);
+							writeU8(BIGINT_HEADER);
+							writeU32(len);
+							currentBuffer.write(value, currentPosition);
+							currentPosition += len;
+							break;
 						}
 					}
 					break;
@@ -519,6 +620,11 @@ class BinaryMiddleware extends SerializerMiddleware {
 					}
 					break;
 				}
+				default: {
+					throw new Error(
+						`Unknown typeof "${typeof thing}" in binary middleware`
+					);
+				}
 			}
 		}
 		flush();
@@ -536,7 +642,7 @@ class BinaryMiddleware extends SerializerMiddleware {
 
 	/**
 	 * @param {SerializedType} data data
-	 * @param {Object} context context object
+	 * @param {object} context context object
 	 * @returns {DeserializedType|Promise<DeserializedType>} deserialized data
 	 */
 	deserialize(data, context) {
@@ -560,7 +666,7 @@ class BinaryMiddleware extends SerializerMiddleware {
 
 	/**
 	 * @param {SerializedType} data data
-	 * @param {Object} context context object
+	 * @param {object} context context object
 	 * @returns {DeserializedType} deserialized data
 	 */
 	_deserialize(data, context) {
@@ -580,9 +686,12 @@ class BinaryMiddleware extends SerializerMiddleware {
 				currentIsBuffer = Buffer.isBuffer(currentBuffer);
 			}
 		};
-		const isInCurrentBuffer = n => {
-			return currentIsBuffer && n + currentPosition <= currentBuffer.length;
-		};
+		/**
+		 * @param {number} n n
+		 * @returns {boolean} true when in current buffer, otherwise false
+		 */
+		const isInCurrentBuffer = n =>
+			currentIsBuffer && n + currentPosition <= currentBuffer.length;
 		const ensureBuffer = () => {
 			if (!currentIsBuffer) {
 				throw new Error(
@@ -640,22 +749,30 @@ class BinaryMiddleware extends SerializerMiddleware {
 			checkOverflow();
 			return res;
 		};
+		/**
+		 * @returns {number} U8
+		 */
 		const readU8 = () => {
 			ensureBuffer();
 			/**
 			 * There is no need to check remaining buffer size here
 			 * since {@link checkOverflow} guarantees at least one byte remaining
 			 */
-			const byte = /** @type {Buffer} */ (currentBuffer).readUInt8(
-				currentPosition
-			);
+			const byte =
+				/** @type {Buffer} */
+				(currentBuffer).readUInt8(currentPosition);
 			currentPosition += I8_SIZE;
 			checkOverflow();
 			return byte;
 		};
-		const readU32 = () => {
-			return read(I32_SIZE).readUInt32LE(0);
-		};
+		/**
+		 * @returns {number} U32
+		 */
+		const readU32 = () => read(I32_SIZE).readUInt32LE(0);
+		/**
+		 * @param {number} data data
+		 * @param {number} n n
+		 */
 		const readBits = (data, n) => {
 			let mask = 1;
 			while (n !== 0) {
@@ -826,6 +943,70 @@ class BinaryMiddleware extends SerializerMiddleware {
 							result.push(read(1).readInt8(0));
 						}
 					};
+				case BIGINT_I8_HEADER: {
+					const len = 1;
+					return () => {
+						const need = I8_SIZE * len;
+
+						if (isInCurrentBuffer(need)) {
+							for (let i = 0; i < len; i++) {
+								const value =
+									/** @type {Buffer} */
+									(currentBuffer).readInt8(currentPosition);
+								result.push(BigInt(value));
+								currentPosition += I8_SIZE;
+							}
+							checkOverflow();
+						} else {
+							const buf = read(need);
+							for (let i = 0; i < len; i++) {
+								const value = buf.readInt8(i * I8_SIZE);
+								result.push(BigInt(value));
+							}
+						}
+					};
+				}
+				case BIGINT_I32_HEADER: {
+					const len = 1;
+					return () => {
+						const need = I32_SIZE * len;
+						if (isInCurrentBuffer(need)) {
+							for (let i = 0; i < len; i++) {
+								const value = /** @type {Buffer} */ (currentBuffer).readInt32LE(
+									currentPosition
+								);
+								result.push(BigInt(value));
+								currentPosition += I32_SIZE;
+							}
+							checkOverflow();
+						} else {
+							const buf = read(need);
+							for (let i = 0; i < len; i++) {
+								const value = buf.readInt32LE(i * I32_SIZE);
+								result.push(BigInt(value));
+							}
+						}
+					};
+				}
+				case BIGINT_HEADER: {
+					return () => {
+						const len = readU32();
+						if (isInCurrentBuffer(len) && currentPosition + len < 0x7fffffff) {
+							const value = currentBuffer.toString(
+								undefined,
+								currentPosition,
+								currentPosition + len
+							);
+
+							result.push(BigInt(value));
+							currentPosition += len;
+							checkOverflow();
+						} else {
+							const value = read(len).toString();
+							result.push(BigInt(value));
+						}
+					};
+				}
 				default:
 					if (header <= 10) {
 						return () => result.push(header);
@@ -912,13 +1093,10 @@ class BinaryMiddleware extends SerializerMiddleware {
 								}
 							}
 						};
-					} else {
-						return () => {
-							throw new Error(
-								`Unexpected header byte 0x${header.toString(16)}`
-							);
-						};
 					}
+					return () => {
+						throw new Error(`Unexpected header byte 0x${header.toString(16)}`);
+					};
 			}
 		});
 
@@ -938,6 +1116,7 @@ class BinaryMiddleware extends SerializerMiddleware {
 		}
 
 		// avoid leaking memory in context
+		// eslint-disable-next-line prefer-const
 		let _result = result;
 		result = undefined;
 		return _result;

@@ -17,11 +17,17 @@ const RuntimeGlobals = require("../RuntimeGlobals");
 /** @typedef {import("../Module").ConcatenationBailoutReasonContext} ConcatenationBailoutReasonContext */
 /** @typedef {import("../NormalModule")} NormalModule */
 /** @typedef {import("../util/runtime").RuntimeSpec} RuntimeSpec */
+/** @typedef {import("./JsonData")} JsonData */
+/** @typedef {import("./JsonModulesPlugin").RawJsonData} RawJsonData */
 
+/**
+ * @param {RawJsonData} data Raw JSON data
+ * @returns {undefined|string} stringified data
+ */
 const stringifySafe = data => {
 	const stringified = JSON.stringify(data);
 	if (!stringified) {
-		return undefined; // Invalid JSON
+		return; // Invalid JSON
 	}
 
 	return stringified.replace(/\u2028|\u2029/g, str =>
@@ -30,36 +36,33 @@ const stringifySafe = data => {
 };
 
 /**
- * @param {Object} data data (always an object or array)
+ * @param {RawJsonData} data Raw JSON data (always an object or array)
  * @param {ExportsInfo} exportsInfo exports info
  * @param {RuntimeSpec} runtime the runtime
- * @returns {Object} reduced data
+ * @returns {RawJsonData} reduced data
  */
 const createObjectForExportsInfo = (data, exportsInfo, runtime) => {
 	if (exportsInfo.otherExportsInfo.getUsed(runtime) !== UsageState.Unused)
 		return data;
 	const isArray = Array.isArray(data);
+	/** @type {RawJsonData} */
 	const reducedData = isArray ? [] : {};
 	for (const key of Object.keys(data)) {
 		const exportInfo = exportsInfo.getReadOnlyExportInfo(key);
 		const used = exportInfo.getUsed(runtime);
 		if (used === UsageState.Unused) continue;
 
-		let value;
-		if (used === UsageState.OnlyPropertiesUsed && exportInfo.exportsInfo) {
-			value = createObjectForExportsInfo(
-				data[key],
-				exportInfo.exportsInfo,
-				runtime
-			);
-		} else {
-			value = data[key];
-		}
-		const name = exportInfo.getUsedName(key, runtime);
-		reducedData[name] = value;
+		/** @type {RawJsonData} */
+		const value =
+			used === UsageState.OnlyPropertiesUsed && exportInfo.exportsInfo
+				? createObjectForExportsInfo(data[key], exportInfo.exportsInfo, runtime)
+				: data[key];
+
+		const name = /** @type {string} */ (exportInfo.getUsedName(key, runtime));
+		/** @type {Record<string, RawJsonData>} */ (reducedData)[name] = value;
 	}
 	if (isArray) {
-		let arrayLengthWhenUsed =
+		const arrayLengthWhenUsed =
 			exportsInfo.getReadOnlyExportInfo("length").getUsed(runtime) !==
 			UsageState.Unused
 				? data.length
@@ -86,6 +89,7 @@ const createObjectForExportsInfo = (data, exportsInfo, runtime) => {
 					: { length: arrayLengthWhenUsed },
 				reducedData
 			);
+		/** @type {number} */
 		const generatedLength =
 			arrayLengthWhenUsed !== undefined
 				? Math.max(arrayLengthWhenUsed, reducedData.length)
@@ -116,12 +120,13 @@ class JsonGenerator extends Generator {
 	 * @returns {number} estimate size of the module
 	 */
 	getSize(module, type) {
-		let data =
+		/** @type {RawJsonData | undefined} */
+		const data =
 			module.buildInfo &&
 			module.buildInfo.jsonData &&
 			module.buildInfo.jsonData.get();
 		if (!data) return 0;
-		return stringifySafe(data).length + 10;
+		return /** @type {string} */ (stringifySafe(data)).length + 10;
 	}
 
 	/**
@@ -148,6 +153,7 @@ class JsonGenerator extends Generator {
 			concatenationScope
 		}
 	) {
+		/** @type {RawJsonData | undefined} */
 		const data =
 			module.buildInfo &&
 			module.buildInfo.jsonData &&
@@ -160,18 +166,20 @@ class JsonGenerator extends Generator {
 			);
 		}
 		const exportsInfo = moduleGraph.getExportsInfo(module);
-		let finalJson =
+		/** @type {RawJsonData} */
+		const finalJson =
 			typeof data === "object" &&
 			data &&
 			exportsInfo.otherExportsInfo.getUsed(runtime) === UsageState.Unused
 				? createObjectForExportsInfo(data, exportsInfo, runtime)
 				: data;
 		// Use JSON because JSON.parse() is much faster than JavaScript evaluation
-		const jsonStr = stringifySafe(finalJson);
+		const jsonStr = /** @type {string} */ (stringifySafe(finalJson));
 		const jsonExpr =
 			jsonStr.length > 20 && typeof finalJson === "object"
-				? `JSON.parse('${jsonStr.replace(/[\\']/g, "\\$&")}')`
+				? `/*#__PURE__*/JSON.parse('${jsonStr.replace(/[\\']/g, "\\$&")}')`
 				: jsonStr;
+		/** @type {string} */
 		let content;
 		if (concatenationScope) {
 			content = `${runtimeTemplate.supportsConst() ? "const" : "var"} ${

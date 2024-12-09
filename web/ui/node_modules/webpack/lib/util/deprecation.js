@@ -11,11 +11,14 @@ const util = require("util");
 const deprecationCache = new Map();
 
 /**
- * @typedef {Object} FakeHookMarker
+ * @typedef {object} FakeHookMarker
  * @property {true} _fakeHook it's a fake hook
  */
 
-/** @template T @typedef {T & FakeHookMarker} FakeHook<T> */
+/**
+ * @template T
+ * @typedef {T & FakeHookMarker} FakeHook<T>
+ */
 
 /**
  * @param {string} message deprecation message
@@ -28,7 +31,7 @@ const createDeprecation = (message, code) => {
 	const fn = util.deprecate(
 		() => {},
 		message,
-		"DEP_WEBPACK_DEPRECATION_" + code
+		`DEP_WEBPACK_DEPRECATION_${code}`
 	);
 	deprecationCache.set(message, fn);
 	return fn;
@@ -69,7 +72,7 @@ const DISABLED_METHODS = [
  * @param {string} name property name
  * @returns {void}
  */
-exports.arrayToSetDeprecation = (set, name) => {
+module.exports.arrayToSetDeprecation = (set, name) => {
 	for (const method of COPY_METHODS) {
 		if (set[method]) continue;
 		const d = createDeprecation(
@@ -78,13 +81,17 @@ exports.arrayToSetDeprecation = (set, name) => {
 		);
 		/**
 		 * @deprecated
-		 * @this {Set}
+		 * @this {Set<any>}
 		 * @returns {number} count
 		 */
 		set[method] = function () {
 			d();
 			const array = Array.from(this);
-			return Array.prototype[method].apply(array, arguments);
+			return Array.prototype[/** @type {keyof COPY_METHODS} */ (method)].apply(
+				array,
+				// eslint-disable-next-line prefer-rest-params
+				arguments
+			);
 		};
 	}
 	const dPush = createDeprecation(
@@ -101,11 +108,12 @@ exports.arrayToSetDeprecation = (set, name) => {
 	);
 	/**
 	 * @deprecated
-	 * @this {Set}
+	 * @this {Set<any>}
 	 * @returns {number} count
 	 */
 	set.push = function () {
 		dPush();
+		// eslint-disable-next-line prefer-rest-params
 		for (const item of Array.from(arguments)) {
 			this.add(item);
 		}
@@ -119,21 +127,28 @@ exports.arrayToSetDeprecation = (set, name) => {
 			);
 		};
 	}
+	/**
+	 * @param {number} index index
+	 * @returns {any} value
+	 */
 	const createIndexGetter = index => {
 		/**
-		 * @this {Set} a Set
+		 * @this {Set<any>} a Set
 		 * @returns {any} the value at this location
 		 */
+		// eslint-disable-next-line func-style
 		const fn = function () {
 			dIndexer();
 			let i = 0;
 			for (const item of this) {
 				if (i++ === index) return item;
 			}
-			return undefined;
 		};
 		return fn;
 	};
+	/**
+	 * @param {number} index index
+	 */
 	const defineIndexGetter = index => {
 		Object.defineProperty(set, index, {
 			get: createIndexGetter(index),
@@ -164,21 +179,31 @@ exports.arrayToSetDeprecation = (set, name) => {
 	set[Symbol.isConcatSpreadable] = true;
 };
 
-exports.createArrayToSetDeprecationSet = name => {
+module.exports.createArrayToSetDeprecationSet = name => {
 	let initialized = false;
 	class SetDeprecatedArray extends Set {
 		constructor(items) {
 			super(items);
 			if (!initialized) {
 				initialized = true;
-				exports.arrayToSetDeprecation(SetDeprecatedArray.prototype, name);
+				module.exports.arrayToSetDeprecation(
+					SetDeprecatedArray.prototype,
+					name
+				);
 			}
 		}
 	}
 	return SetDeprecatedArray;
 };
 
-exports.soonFrozenObjectDeprecation = (obj, name, code, note = "") => {
+/**
+ * @param {object} obj object
+ * @param {string} name property name
+ * @param {string} code deprecation code
+ * @param {string} note additional note
+ * @returns {Proxy<object>} frozen object with deprecation when modifying
+ */
+module.exports.soonFrozenObjectDeprecation = (obj, name, code, note = "") => {
 	const message = `${name} will be frozen in future, all modifications are deprecated.${
 		note && `\n${note}`
 	}`;
@@ -245,7 +270,7 @@ const deprecateAllProperties = (obj, message, code) => {
 	}
 	return /** @type {T} */ (newObj);
 };
-exports.deprecateAllProperties = deprecateAllProperties;
+module.exports.deprecateAllProperties = deprecateAllProperties;
 
 /**
  * @template T
@@ -254,7 +279,7 @@ exports.deprecateAllProperties = deprecateAllProperties;
  * @param {string=} code deprecation code (not deprecated when unset)
  * @returns {FakeHook<T>} fake hook which redirects
  */
-exports.createFakeHook = (fakeHook, message, code) => {
+module.exports.createFakeHook = (fakeHook, message, code) => {
 	if (message && code) {
 		fakeHook = deprecateAllProperties(fakeHook, message, code);
 	}

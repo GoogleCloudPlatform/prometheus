@@ -10,13 +10,17 @@ const path = require("path");
 const { RawSource } = require("webpack-sources");
 const ConcatenationScope = require("../ConcatenationScope");
 const Generator = require("../Generator");
+const { ASSET_MODULE_TYPE } = require("../ModuleTypeConstants");
 const RuntimeGlobals = require("../RuntimeGlobals");
+const CssUrlDependency = require("../dependencies/CssUrlDependency");
 const createHash = require("../util/createHash");
 const { makePathsRelative } = require("../util/identifier");
 const nonNumericOnlyHash = require("../util/nonNumericOnlyHash");
 
 /** @typedef {import("webpack-sources").Source} Source */
+/** @typedef {import("../../declarations/WebpackOptions").AssetGeneratorDataUrlOptions} AssetGeneratorDataUrlOptions */
 /** @typedef {import("../../declarations/WebpackOptions").AssetGeneratorOptions} AssetGeneratorOptions */
+/** @typedef {import("../../declarations/WebpackOptions").AssetModuleFilename} AssetModuleFilename */
 /** @typedef {import("../../declarations/WebpackOptions").AssetModuleOutputPath} AssetModuleOutputPath */
 /** @typedef {import("../../declarations/WebpackOptions").RawPublicPath} RawPublicPath */
 /** @typedef {import("../Compilation")} Compilation */
@@ -24,11 +28,21 @@ const nonNumericOnlyHash = require("../util/nonNumericOnlyHash");
 /** @typedef {import("../Generator").GenerateContext} GenerateContext */
 /** @typedef {import("../Generator").UpdateHashContext} UpdateHashContext */
 /** @typedef {import("../Module")} Module */
+/** @typedef {import("../Module").BuildInfo} BuildInfo */
 /** @typedef {import("../Module").ConcatenationBailoutReasonContext} ConcatenationBailoutReasonContext */
 /** @typedef {import("../NormalModule")} NormalModule */
 /** @typedef {import("../RuntimeTemplate")} RuntimeTemplate */
+/** @typedef {import("../TemplatedPathPlugin").TemplatePath} TemplatePath */
 /** @typedef {import("../util/Hash")} Hash */
+/** @typedef {import("../util/createHash").Algorithm} Algorithm */
 
+/**
+ * @template T
+ * @template U
+ * @param {Array<T> | Set<T>} a a
+ * @param {Array<U> | Set<U>} b b
+ * @returns {Array<T> & Array<U>} array
+ */
 const mergeMaybeArrays = (a, b) => {
 	const set = new Set();
 	if (Array.isArray(a)) for (const item of a) set.add(item);
@@ -38,6 +52,13 @@ const mergeMaybeArrays = (a, b) => {
 	return Array.from(set);
 };
 
+/**
+ * @template {object} T
+ * @template {object} U
+ * @param {TODO} a a
+ * @param {TODO} b b
+ * @returns {T & U} object
+ */
 const mergeAssetInfo = (a, b) => {
 	const result = { ...a, ...b };
 	for (const key of Object.keys(a)) {
@@ -67,6 +88,13 @@ const mergeAssetInfo = (a, b) => {
 	return result;
 };
 
+/**
+ * @template {object} T
+ * @template {object} U
+ * @param {TODO} a a
+ * @param {TODO} b b
+ * @returns {T & U} object
+ */
 const mergeRelatedInfo = (a, b) => {
 	const result = { ...a, ...b };
 	for (const key of Object.keys(a)) {
@@ -78,7 +106,13 @@ const mergeRelatedInfo = (a, b) => {
 	return result;
 };
 
+/**
+ * @param {"base64" | false} encoding encoding
+ * @param {Source} source source
+ * @returns {string} encoded data
+ */
 const encodeDataUri = (encoding, source) => {
+	/** @type {string | undefined} */
 	let encodedContent;
 
 	switch (encoding) {
@@ -93,9 +127,13 @@ const encodeDataUri = (encoding, source) => {
 				encodedContent = content.toString("utf-8");
 			}
 
-			encodedContent = encodeURIComponent(encodedContent).replace(
+			encodedContent = encodeURIComponent(
+				/** @type {string} */
+				(encodedContent)
+			).replace(
 				/[!'()*]/g,
-				character => "%" + character.codePointAt(0).toString(16)
+				character =>
+					`%${/** @type {number} */ (character.codePointAt(0)).toString(16)}`
 			);
 			break;
 		}
@@ -106,21 +144,34 @@ const encodeDataUri = (encoding, source) => {
 	return encodedContent;
 };
 
+/**
+ * @param {string} encoding encoding
+ * @param {string} content content
+ * @returns {Buffer} decoded content
+ */
 const decodeDataUriContent = (encoding, content) => {
 	const isBase64 = encoding === "base64";
-	return isBase64
-		? Buffer.from(content, "base64")
-		: Buffer.from(decodeURIComponent(content), "ascii");
+
+	if (isBase64) {
+		return Buffer.from(content, "base64");
+	}
+
+	// If we can't decode return the original body
+	try {
+		return Buffer.from(decodeURIComponent(content), "ascii");
+	} catch (_) {
+		return Buffer.from(content, "ascii");
+	}
 };
 
 const JS_TYPES = new Set(["javascript"]);
-const JS_AND_ASSET_TYPES = new Set(["javascript", "asset"]);
+const JS_AND_ASSET_TYPES = new Set(["javascript", ASSET_MODULE_TYPE]);
 const DEFAULT_ENCODING = "base64";
 
 class AssetGenerator extends Generator {
 	/**
 	 * @param {AssetGeneratorOptions["dataUrl"]=} dataUrlOptions the options for the data url
-	 * @param {string=} filename override for output.assetModuleFilename
+	 * @param {AssetModuleFilename=} filename override for output.assetModuleFilename
 	 * @param {RawPublicPath=} publicPath override for output.assetModulePublicPath
 	 * @param {AssetModuleOutputPath=} outputPath the output path for the emitted file which is not included in the runtime import
 	 * @param {boolean=} emit generate output asset
@@ -167,9 +218,15 @@ class AssetGenerator extends Generator {
 			);
 		}
 
-		let mimeType = this.dataUrlOptions.mimetype;
+		/** @type {string | boolean | undefined} */
+		let mimeType =
+			/** @type {AssetGeneratorDataUrlOptions} */
+			(this.dataUrlOptions).mimetype;
 		if (mimeType === undefined) {
-			const ext = path.extname(module.nameForCondition());
+			const ext = path.extname(
+				/** @type {string} */
+				(module.nameForCondition())
+			);
 			if (
 				module.resourceResolveData &&
 				module.resourceResolveData.mimetype !== undefined
@@ -199,7 +256,7 @@ class AssetGenerator extends Generator {
 			);
 		}
 
-		return mimeType;
+		return /** @type {string} */ (mimeType);
 	}
 
 	/**
@@ -220,12 +277,15 @@ class AssetGenerator extends Generator {
 		}
 	) {
 		switch (type) {
-			case "asset":
-				return module.originalSource();
+			case ASSET_MODULE_TYPE:
+				return /** @type {Source} */ (module.originalSource());
 			default: {
 				let content;
-				const originalSource = module.originalSource();
-				if (module.buildInfo.dataUrl) {
+				const originalSource = /** @type {Source} */ (module.originalSource());
+				if (
+					/** @type {BuildInfo} */
+					(module.buildInfo).dataUrl
+				) {
 					let encodedSource;
 					if (typeof this.dataUrlOptions === "function") {
 						encodedSource = this.dataUrlOptions.call(
@@ -237,15 +297,16 @@ class AssetGenerator extends Generator {
 							}
 						);
 					} else {
-						/** @type {string | false | undefined} */
-						let encoding = this.dataUrlOptions.encoding;
-						if (encoding === undefined) {
-							if (
-								module.resourceResolveData &&
-								module.resourceResolveData.encoding !== undefined
-							) {
-								encoding = module.resourceResolveData.encoding;
-							}
+						/** @type {"base64" | false | undefined} */
+						let encoding =
+							/** @type {AssetGeneratorDataUrlOptions} */
+							(this.dataUrlOptions).encoding;
+						if (
+							encoding === undefined &&
+							module.resourceResolveData &&
+							module.resourceResolveData.encoding !== undefined
+						) {
+							encoding = module.resourceResolveData.encoding;
 						}
 						if (encoding === undefined) {
 							encoding = DEFAULT_ENCODING;
@@ -271,13 +332,20 @@ class AssetGenerator extends Generator {
 							encoding ? `;${encoding}` : ""
 						},${encodedContent}`;
 					}
-					const data = getData();
+					const data =
+						/** @type {NonNullable<GenerateContext["getData"]>} */
+						(getData)();
 					data.set("url", Buffer.from(encodedSource));
 					content = JSON.stringify(encodedSource);
 				} else {
 					const assetModuleFilename =
-						this.filename || runtimeTemplate.outputOptions.assetModuleFilename;
-					const hash = createHash(runtimeTemplate.outputOptions.hashFunction);
+						this.filename ||
+						/** @type {AssetModuleFilename} */
+						(runtimeTemplate.outputOptions.assetModuleFilename);
+					const hash = createHash(
+						/** @type {Algorithm} */
+						(runtimeTemplate.outputOptions.hashFunction)
+					);
 					if (runtimeTemplate.outputOptions.hashSalt) {
 						hash.update(runtimeTemplate.outputOptions.hashSalt);
 					}
@@ -287,9 +355,11 @@ class AssetGenerator extends Generator {
 					);
 					const contentHash = nonNumericOnlyHash(
 						fullHash,
-						runtimeTemplate.outputOptions.hashDigestLength
+						/** @type {number} */
+						(runtimeTemplate.outputOptions.hashDigestLength)
 					);
-					module.buildInfo.fullContentHash = fullHash;
+					/** @type {BuildInfo} */
+					(module.buildInfo).fullContentHash = fullHash;
 					const sourceFilename = this.getSourceFileName(
 						module,
 						runtimeTemplate
@@ -306,6 +376,7 @@ class AssetGenerator extends Generator {
 							}
 						);
 					let assetPath;
+					let assetPathForCss;
 					if (this.publicPath !== undefined) {
 						const { path, info } =
 							runtimeTemplate.compilation.getAssetPathWithInfo(
@@ -320,12 +391,25 @@ class AssetGenerator extends Generator {
 							);
 						assetInfo = mergeAssetInfo(assetInfo, info);
 						assetPath = JSON.stringify(path + filename);
+						assetPathForCss = path + filename;
 					} else {
 						runtimeRequirements.add(RuntimeGlobals.publicPath); // add __webpack_require__.p
 						assetPath = runtimeTemplate.concatenation(
 							{ expr: RuntimeGlobals.publicPath },
 							filename
 						);
+						const compilation = runtimeTemplate.compilation;
+						const path =
+							compilation.outputOptions.publicPath === "auto"
+								? CssUrlDependency.PUBLIC_PATH_AUTO
+								: compilation.getAssetPath(
+										/** @type {TemplatePath} */
+										(compilation.outputOptions.publicPath),
+										{
+											hash: compilation.hash
+										}
+									);
+						assetPathForCss = path + filename;
 					}
 					assetInfo = {
 						sourceFilename,
@@ -346,8 +430,10 @@ class AssetGenerator extends Generator {
 						assetInfo = mergeAssetInfo(assetInfo, info);
 						filename = path.posix.join(outputPath, filename);
 					}
-					module.buildInfo.filename = filename;
-					module.buildInfo.assetInfo = assetInfo;
+					/** @type {BuildInfo} */
+					(module.buildInfo).filename = filename;
+					/** @type {BuildInfo} */
+					(module.buildInfo).assetInfo = assetInfo;
 					if (getData) {
 						// Due to code generation caching module.buildInfo.XXX can't used to store such information
 						// It need to be stored in the code generation results instead, where it's cached too
@@ -356,6 +442,7 @@ class AssetGenerator extends Generator {
 						data.set("fullContentHash", fullHash);
 						data.set("filename", filename);
 						data.set("assetInfo", assetInfo);
+						data.set("assetPathForCss", assetPathForCss);
 					}
 					content = assetPath;
 				}
@@ -369,12 +456,9 @@ class AssetGenerator extends Generator {
 							ConcatenationScope.NAMESPACE_OBJECT_EXPORT
 						} = ${content};`
 					);
-				} else {
-					runtimeRequirements.add(RuntimeGlobals.module);
-					return new RawSource(
-						`${RuntimeGlobals.module}.exports = ${content};`
-					);
 				}
+				runtimeRequirements.add(RuntimeGlobals.module);
+				return new RawSource(`${RuntimeGlobals.module}.exports = ${content};`);
 			}
 		}
 	}
@@ -386,9 +470,8 @@ class AssetGenerator extends Generator {
 	getTypes(module) {
 		if ((module.buildInfo && module.buildInfo.dataUrl) || this.emit === false) {
 			return JS_TYPES;
-		} else {
-			return JS_AND_ASSET_TYPES;
 		}
+		return JS_AND_ASSET_TYPES;
 	}
 
 	/**
@@ -398,7 +481,7 @@ class AssetGenerator extends Generator {
 	 */
 	getSize(module, type) {
 		switch (type) {
-			case "asset": {
+			case ASSET_MODULE_TYPE: {
 				const originalSource = module.originalSource();
 
 				if (!originalSource) {
@@ -420,11 +503,10 @@ class AssetGenerator extends Generator {
 					// 4/3 = base64 encoding
 					// 34 = ~ data url header + footer + rounding
 					return originalSource.size() * 1.34 + 36;
-				} else {
-					// it's only estimated so this number is probably fine
-					// Example: m.exports=r.p+"0123456789012345678901.ext"
-					return 42;
 				}
+				// it's only estimated so this number is probably fine
+				// Example: m.exports=r.p+"0123456789012345678901.ext"
+				return 42;
 		}
 	}
 
@@ -432,8 +514,12 @@ class AssetGenerator extends Generator {
 	 * @param {Hash} hash hash that will be modified
 	 * @param {UpdateHashContext} updateHashContext context for updating hash
 	 */
-	updateHash(hash, { module, runtime, runtimeTemplate, chunkGraph }) {
-		if (module.buildInfo.dataUrl) {
+	updateHash(hash, updateHashContext) {
+		const { module } = updateHashContext;
+		if (
+			/** @type {BuildInfo} */
+			(module.buildInfo).dataUrl
+		) {
 			hash.update("data-url");
 			// this.dataUrlOptions as function should be pure and only depend on input source and filename
 			// therefore it doesn't need to be hashed
@@ -442,18 +528,25 @@ class AssetGenerator extends Generator {
 					.ident;
 				if (ident) hash.update(ident);
 			} else {
+				const dataUrlOptions =
+					/** @type {AssetGeneratorDataUrlOptions} */
+					(this.dataUrlOptions);
 				if (
-					this.dataUrlOptions.encoding &&
-					this.dataUrlOptions.encoding !== DEFAULT_ENCODING
+					dataUrlOptions.encoding &&
+					dataUrlOptions.encoding !== DEFAULT_ENCODING
 				) {
-					hash.update(this.dataUrlOptions.encoding);
+					hash.update(dataUrlOptions.encoding);
 				}
-				if (this.dataUrlOptions.mimetype)
-					hash.update(this.dataUrlOptions.mimetype);
+				if (dataUrlOptions.mimetype) hash.update(dataUrlOptions.mimetype);
 				// computed mimetype depends only on module filename which is already part of the hash
 			}
 		} else {
 			hash.update("resource");
+
+			const { module, chunkGraph, runtime } = updateHashContext;
+			const runtimeTemplate =
+				/** @type {NonNullable<UpdateHashContext["runtimeTemplate"]>} */
+				(updateHashContext.runtimeTemplate);
 
 			const pathData = {
 				module,
@@ -476,7 +569,9 @@ class AssetGenerator extends Generator {
 			}
 
 			const assetModuleFilename =
-				this.filename || runtimeTemplate.outputOptions.assetModuleFilename;
+				this.filename ||
+				/** @type {AssetModuleFilename} */
+				(runtimeTemplate.outputOptions.assetModuleFilename);
 			const { path: filename, info } =
 				runtimeTemplate.compilation.getAssetPathWithInfo(
 					assetModuleFilename,

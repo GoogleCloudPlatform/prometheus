@@ -12,22 +12,58 @@ const RuntimeGlobals = require("../RuntimeGlobals");
 const Template = require("../Template");
 
 /** @typedef {import("webpack-sources").Source} Source */
+/** @typedef {import("../../declarations/WebpackOptions").CssGeneratorExportsConvention} CssGeneratorExportsConvention */
+/** @typedef {import("../../declarations/WebpackOptions").CssGeneratorLocalIdentName} CssGeneratorLocalIdentName */
 /** @typedef {import("../Dependency")} Dependency */
+/** @typedef {import("../DependencyTemplate").CssDependencyTemplateContext} DependencyTemplateContext */
+/** @typedef {import("../DependencyTemplate").CssExportsData} CssExportsData */
 /** @typedef {import("../Generator").GenerateContext} GenerateContext */
 /** @typedef {import("../Generator").UpdateHashContext} UpdateHashContext */
 /** @typedef {import("../Module").ConcatenationBailoutReasonContext} ConcatenationBailoutReasonContext */
 /** @typedef {import("../NormalModule")} NormalModule */
 /** @typedef {import("../util/Hash")} Hash */
 
+/**
+ * @template T
+ * @typedef {import("../InitFragment")<T>} InitFragment
+ */
+
 const TYPES = new Set(["javascript"]);
 
 class CssExportsGenerator extends Generator {
-	constructor() {
+	/**
+	 * @param {CssGeneratorExportsConvention | undefined} convention the convention of the exports name
+	 * @param {CssGeneratorLocalIdentName | undefined} localIdentName css export local ident name
+	 * @param {boolean} esModule whether to use ES modules syntax
+	 */
+	constructor(convention, localIdentName, esModule) {
 		super();
+		/** @type {CssGeneratorExportsConvention | undefined} */
+		this.convention = convention;
+		/** @type {CssGeneratorLocalIdentName | undefined} */
+		this.localIdentName = localIdentName;
+		/** @type {boolean} */
+		this.esModule = esModule;
 	}
 
-	// TODO add getConcatenationBailoutReason to allow concatenation
-	// but how to make it have a module id
+	/**
+	 * @param {NormalModule} module module for which the bailout reason should be determined
+	 * @param {ConcatenationBailoutReasonContext} context context
+	 * @returns {string | undefined} reason why this module can't be concatenated, undefined when it can be concatenated
+	 */
+	getConcatenationBailoutReason(module, context) {
+		if (!this.esModule) {
+			return "Module is not an ECMAScript module";
+		}
+		// TODO webpack 6: remove /\[moduleid\]/.test
+		if (
+			/\[id\]/.test(this.localIdentName) ||
+			/\[moduleid\]/.test(this.localIdentName)
+		) {
+			return "The localIdentName includes moduleId ([id] or [moduleid])";
+		}
+		return undefined;
+	}
 
 	/**
 	 * @param {NormalModule} module module for which the code should be generated
@@ -36,13 +72,20 @@ class CssExportsGenerator extends Generator {
 	 */
 	generate(module, generateContext) {
 		const source = new ReplaceSource(new RawSource(""));
+		/** @type {InitFragment<TODO>[]} */
 		const initFragments = [];
-		const cssExports = new Map();
+		/** @type {CssExportsData} */
+		const cssExportsData = {
+			esModule: this.esModule,
+			exports: new Map()
+		};
 
 		generateContext.runtimeRequirements.add(RuntimeGlobals.module);
 
+		let chunkInitFragments;
 		const runtimeRequirements = new Set();
 
+		/** @type {DependencyTemplateContext} */
 		const templateContext = {
 			runtimeTemplate: generateContext.runtimeTemplate,
 			dependencyTemplates: generateContext.dependencyTemplates,
@@ -50,13 +93,28 @@ class CssExportsGenerator extends Generator {
 			chunkGraph: generateContext.chunkGraph,
 			module,
 			runtime: generateContext.runtime,
-			runtimeRequirements: runtimeRequirements,
+			runtimeRequirements,
 			concatenationScope: generateContext.concatenationScope,
 			codeGenerationResults: generateContext.codeGenerationResults,
 			initFragments,
-			cssExports
+			cssExportsData,
+			get chunkInitFragments() {
+				if (!chunkInitFragments) {
+					const data = generateContext.getData();
+					chunkInitFragments = data.get("chunkInitFragments");
+					if (!chunkInitFragments) {
+						chunkInitFragments = [];
+						data.set("chunkInitFragments", chunkInitFragments);
+					}
+				}
+
+				return chunkInitFragments;
+			}
 		};
 
+		/**
+		 * @param {Dependency} dependency the dependency
+		 */
 		const handleDependency = dependency => {
 			const constructor = /** @type {new (...args: any[]) => Dependency} */ (
 				dependency.constructor
@@ -64,52 +122,56 @@ class CssExportsGenerator extends Generator {
 			const template = generateContext.dependencyTemplates.get(constructor);
 			if (!template) {
 				throw new Error(
-					"No template for dependency: " + dependency.constructor.name
+					`No template for dependency: ${dependency.constructor.name}`
 				);
 			}
 
 			template.apply(dependency, source, templateContext);
 		};
-		module.dependencies.forEach(handleDependency);
+
+		for (const dependency of module.dependencies) {
+			handleDependency(dependency);
+		}
 
 		if (generateContext.concatenationScope) {
 			const source = new ConcatSource();
 			const usedIdentifiers = new Set();
-			for (const [k, v] of cssExports) {
-				let identifier = Template.toIdentifier(k);
-				let i = 0;
+			for (const [name, v] of cssExportsData.exports) {
+				let identifier = Template.toIdentifier(name);
+				const i = 0;
 				while (usedIdentifiers.has(identifier)) {
-					identifier = Template.toIdentifier(k + i);
+					identifier = Template.toIdentifier(name + i);
 				}
 				usedIdentifiers.add(identifier);
-				generateContext.concatenationScope.registerExport(k, identifier);
+				generateContext.concatenationScope.registerExport(name, identifier);
 				source.add(
 					`${
-						generateContext.runtimeTemplate.supportsConst ? "const" : "var"
+						generateContext.runtimeTemplate.supportsConst() ? "const" : "var"
 					} ${identifier} = ${JSON.stringify(v)};\n`
 				);
 			}
 			return source;
-		} else {
-			const otherUsed =
-				generateContext.moduleGraph
-					.getExportsInfo(module)
-					.otherExportsInfo.getUsed(generateContext.runtime) !==
+		}
+		const needNsObj =
+			this.esModule &&
+			generateContext.moduleGraph
+				.getExportsInfo(module)
+				.otherExportsInfo.getUsed(generateContext.runtime) !==
 				UsageState.Unused;
-			if (otherUsed) {
-				generateContext.runtimeRequirements.add(
-					RuntimeGlobals.makeNamespaceObject
-				);
-			}
-			return new RawSource(
-				`${otherUsed ? `${RuntimeGlobals.makeNamespaceObject}(` : ""}${
-					module.moduleArgument
-				}.exports = {\n${Array.from(
-					cssExports,
-					([k, v]) => `\t${JSON.stringify(k)}: ${JSON.stringify(v)}`
-				).join(",\n")}\n}${otherUsed ? ")" : ""};`
+		if (needNsObj) {
+			generateContext.runtimeRequirements.add(
+				RuntimeGlobals.makeNamespaceObject
 			);
 		}
+		const exports = [];
+		for (const [name, v] of cssExportsData.exports) {
+			exports.push(`\t${JSON.stringify(name)}: ${JSON.stringify(v)}`);
+		}
+		return new RawSource(
+			`${needNsObj ? `${RuntimeGlobals.makeNamespaceObject}(` : ""}${
+				module.moduleArgument
+			}.exports = {\n${exports.join(",\n")}\n}${needNsObj ? ")" : ""};`
+		);
 	}
 
 	/**
@@ -133,7 +195,9 @@ class CssExportsGenerator extends Generator {
 	 * @param {Hash} hash hash that will be modified
 	 * @param {UpdateHashContext} updateHashContext context for updating hash
 	 */
-	updateHash(hash, { module }) {}
+	updateHash(hash, { module }) {
+		hash.update(this.esModule.toString());
+	}
 }
 
 module.exports = CssExportsGenerator;

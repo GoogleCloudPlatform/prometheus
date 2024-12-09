@@ -11,16 +11,20 @@ const ModuleDependency = require("./ModuleDependency");
 
 /** @typedef {import("../Dependency").ReferencedExport} ReferencedExport */
 /** @typedef {import("../ModuleGraph")} ModuleGraph */
+/** @typedef {import("../javascript/JavascriptParser").ImportAttributes} ImportAttributes */
+/** @typedef {import("../serialization/ObjectMiddleware").ObjectDeserializerContext} ObjectDeserializerContext */
+/** @typedef {import("../serialization/ObjectMiddleware").ObjectSerializerContext} ObjectSerializerContext */
 /** @typedef {import("../util/runtime").RuntimeSpec} RuntimeSpec */
 
 class ContextElementDependency extends ModuleDependency {
 	/**
 	 * @param {string} request request
 	 * @param {string|undefined} userRequest user request
-	 * @param {string} typePrefix type prefix
+	 * @param {string | undefined} typePrefix type prefix
 	 * @param {string} category category
-	 * @param {string[][]=} referencedExports referenced exports
+	 * @param {(string[][] | null)=} referencedExports referenced exports
 	 * @param {string=} context context
+	 * @param {ImportAttributes=} attributes import assertions
 	 */
 	constructor(
 		request,
@@ -28,7 +32,8 @@ class ContextElementDependency extends ModuleDependency {
 		typePrefix,
 		category,
 		referencedExports,
-		context
+		context,
+		attributes
 	) {
 		super(request);
 		this.referencedExports = referencedExports;
@@ -39,6 +44,8 @@ class ContextElementDependency extends ModuleDependency {
 		if (userRequest) {
 			this.userRequest = userRequest;
 		}
+
+		this.assertions = attributes;
 	}
 
 	get type() {
@@ -64,23 +71,31 @@ class ContextElementDependency extends ModuleDependency {
 			? this.referencedExports.map(e => ({
 					name: e,
 					canMangle: false
-			  }))
+				}))
 			: Dependency.EXPORTS_OBJECT_REFERENCED;
 	}
 
+	/**
+	 * @param {ObjectSerializerContext} context context
+	 */
 	serialize(context) {
 		const { write } = context;
 		write(this._typePrefix);
 		write(this._category);
 		write(this.referencedExports);
+		write(this.assertions);
 		super.serialize(context);
 	}
 
+	/**
+	 * @param {ObjectDeserializerContext} context context
+	 */
 	deserialize(context) {
 		const { read } = context;
 		this._typePrefix = read();
 		this._category = read();
 		this.referencedExports = read();
+		this.assertions = read();
 		super.deserialize(context);
 	}
 }
