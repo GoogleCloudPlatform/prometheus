@@ -1,7 +1,7 @@
 module github.com/prometheus/prometheus
 
 go 1.22.3
-toolchain go1.23.7
+toolchain go1.24.1
 
 require (
 	github.com/Azure/azure-sdk-for-go v65.0.0+incompatible
@@ -94,7 +94,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/distribution/reference v0.5.0 // indirect
 	github.com/go-kit/kit v0.12.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/google/gnostic-models v0.6.8 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
