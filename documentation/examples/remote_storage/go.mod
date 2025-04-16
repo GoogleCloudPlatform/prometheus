@@ -1,6 +1,7 @@
 module github.com/prometheus/prometheus/documentation/examples/remote_storage
 
 go 1.21
+toolchain go1.24.1
 
 require (
 	github.com/alecthomas/kingpin/v2 v2.3.2
@@ -46,10 +47,10 @@ require (
 	go.uber.org/atomic v1.10.0 // indirect
 	go.uber.org/goleak v1.2.1 // indirect
 	golang.org/x/exp v0.0.0-20230307190834-24139beb5833 // indirect
-	golang.org/x/net v0.8.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/oauth2 v0.6.0 // indirect
-	golang.org/x/sys v0.6.0 // indirect
-	golang.org/x/text v0.8.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/text v0.23.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
