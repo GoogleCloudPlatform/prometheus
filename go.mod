@@ -1,6 +1,6 @@
 module github.com/prometheus/prometheus
 
-go 1.23.4
+go 1.24
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.11.1
@@ -8,7 +8,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v5 v5.7.0
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v4 v4.3.0
 	github.com/Code-Hex/go-generics-cache v1.5.1
-	github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20250513215909-3db65500729f
+	github.com/GoogleCloudPlatform/prometheus-engine v0.13.0-rc.0.0.20250515130306-d4cf8a2446e1
 	github.com/KimMachineGun/automemlimit v0.7.2
 	github.com/alecthomas/kingpin/v2 v2.4.0
 	github.com/alecthomas/units v0.0.0-20240927000941-0f3dac36c52b

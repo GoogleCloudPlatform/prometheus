@@ -1,5 +1,6 @@
 ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs
-ARG IMAGE_BUILD_GO=docker.io/library/golang:1.23.4-bookworm@sha256:ef30001eeadd12890c7737c26f3be5b3a8479ccdcdc553b999c84879875a27ce
+#ARG IMAGE_BUILD_GO=docker.io/library/golang:1.23.4-bookworm@sha256:ef30001eeadd12890c7737c26f3be5b3a8479ccdcdc553b999c84879875a27ce
+ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.2@sha256:b1c2f92db6ecd86731fa53f7b48f357dda1b9107655c9f361275c31fea9673fe
 
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/static-debian12:debug
 ARG IMAGE_BASE=gcr.io/distroless/base-nossl@sha256:c2977db459c8763ee3d739f68b547d2193af92267f989754c09153919757d36a
