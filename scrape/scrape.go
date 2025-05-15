@@ -158,7 +158,7 @@ func newScrapePool(cfg *config.ScrapeConfig, app storage.Appendable, offsetSeed 
 
 		// Inject target for propagation to the GCM export pipeline at the storage level.
 		loopCtx := gcm_export.WithMetadataFunc(ctx, func(metric string) (gcm_export.MetricMetadata, bool) {
-			md, ok := opts.target.Metadata(metric)
+			md, ok := opts.target.GetMetadata(metric)
 			return gcm_export.MetricMetadata(md), ok
 		})
 

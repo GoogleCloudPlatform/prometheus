@@ -998,6 +998,7 @@ func (a *appender) Commit() error {
 
 	a.clearData()
 	a.appenderPool.Put(a)
+	gcm_exportsetup.Global().Export(a.metadata, a.pendingSamples, a.exportExemplars)
 
 	if a.writeNotified != nil {
 		a.writeNotified.Notify()
@@ -1075,16 +1076,7 @@ func (a *appender) log() error {
 			a.metrics.totalOutOfOrderSamples.Inc()
 		}
 	}
-
-<<<<<<< HEAD
 	return nil
-=======
-	gcm_exportsetup.Global().Export(a.metadata, a.pendingSamples, a.exportExemplars)
-
-	//nolint:staticcheck
-	a.bufPool.Put(buf)
-	return a.Rollback()
->>>>>>> 80bca2306 (Google patch: Export to Google Cloud Monitoring)
 }
 
 // clearData clears all pending data.

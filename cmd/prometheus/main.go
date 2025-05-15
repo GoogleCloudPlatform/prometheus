@@ -38,6 +38,7 @@ import (
 	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
 	gcm_export "github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/setup"
 	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/secrets"
+	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/alecthomas/units"
 	"github.com/go-kit/log"
@@ -236,8 +237,6 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 				config.DefaultConfig.GlobalConfig.ScrapeProtocols = config.DefaultProtoFirstScrapeProtocols
 				config.DefaultGlobalConfig.ScrapeProtocols = config.DefaultProtoFirstScrapeProtocols
 				level.Info(logger).Log("msg", "Experimental created timestamp zero ingestion enabled. Changed default scrape_protocols to prefer PrometheusProto format.", "global.scrape_protocols", fmt.Sprintf("%v", config.DefaultGlobalConfig.ScrapeProtocols))
-				c.scrape.EnableProtobufNegotiation = true
-				level.Info(logger).Log("msg", "Experimental native histogram support enabled.")
 			case "google-kubernetes-secret-provider":
 				c.enableKubeSecretProvider = true
 				level.Info(logger).Log("msg", "Experimental Kubernetes secret provider enabled.")
