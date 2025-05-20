@@ -107,10 +107,10 @@ var (
 		// Limit buckets to 200, which is the real-world batch size for GCM.
 		Buckets: []float64{1, 2, 5, 10, 20, 50, 100, 150, 200},
 	})
-	ErrLocationGlobal = errors.New("location must be set to a named Google Cloud " +
-		"region and cannot be set to \"global\". please choose the " +
+	ErrLocationGlobal = errors.New("Location must be set to a named Google Cloud " +
+		"region and cannot be set to \"global\". Please choose the " +
 		"Google Cloud region that is physically nearest to your cluster. " +
-		"see https://www.cloudinfrastructuremap.com/")
+		"See https://www.cloudinfrastructuremap.com/")
 )
 
 type metricServiceClient interface {
@@ -306,7 +306,7 @@ func NopLease() Lease {
 // alwaysLease is a lease that is always held.
 type alwaysLease struct{}
 
-func (alwaysLease) Range() (start time.Time, end time.Time, ok bool) {
+func (alwaysLease) Range() (time.Time, time.Time, bool) {
 	return time.UnixMilli(math.MinInt64), time.UnixMilli(math.MaxInt64), true
 }
 
@@ -524,14 +524,12 @@ func validateLabelSet(lset labels.Labels) error {
 	// In production scenarios, "location" should most likely never be overridden as it
 	// means crossing failure domains. Instead, each location should run a replica of the
 	// evaluator with the same rules.
-	switch loc := lset.Get(KeyLocation); loc {
-	case "":
+	if loc := lset.Get(KeyLocation); loc == "" {
 		return fmt.Errorf("no label %q set via external labels or flag", KeyLocation)
-	case "global":
+	} else if loc == "global" {
 		return ErrLocationGlobal
-	default:
-		return nil
 	}
+	return nil
 }
 
 // SetLabelsByIDFunc injects a function that can be used to retrieve a label set
@@ -632,7 +630,7 @@ const (
 	ClientName = "prometheus-engine-export"
 	// mainModuleVersion is the version of the main module. Align with git tag.
 	// TODO(TheSpiritXIII): Remove with https://github.com/golang/go/issues/50603
-	mainModuleVersion = "v0.15.0-rc.7" // x-release-please-version
+	mainModuleVersion = "v0.15.3" // x-release-please-version
 	// mainModuleName is the name of the main module. Align with go.mod.
 	mainModuleName = "github.com/GoogleCloudPlatform/prometheus-engine"
 )
@@ -673,7 +671,7 @@ func Version() (string, error) {
 
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		return "", errors.New("unable to retrieve build info")
+		return "", fmt.Errorf("unable to retrieve build info")
 	}
 
 	if bi.Main.Path == mainModuleName {
@@ -1028,7 +1026,7 @@ func (b *batch) empty() bool {
 
 // send the accumulated samples to their respective projects. It returns once all
 // requests have completed and notifies the pending shards.
-func (b *batch) send(
+func (b batch) send(
 	ctx context.Context,
 	sendOne func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error,
 ) {

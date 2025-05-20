@@ -37,7 +37,7 @@ type WatchSPConfig struct {
 }
 
 func (c *WatchSPConfig) newProvider(ctx context.Context, opts ProviderOptions) (*watchProvider, error) {
-	client, err := c.client()
+	client, err := c.ClientConfig.client()
 	if err != nil {
 		return nil, err
 	}
