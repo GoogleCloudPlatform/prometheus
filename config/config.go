@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/secrets"
 	"github.com/alecthomas/units"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
@@ -240,8 +241,14 @@ type Config struct {
 	StorageConfig     StorageConfig   `yaml:"storage,omitempty"`
 	TracingConfig     TracingConfig   `yaml:"tracing,omitempty"`
 
+	// Secret management:
+	secrets.ClientConfig `yaml:"kubernetes_sp_config,omitempty"`
+	SecretConfigs        []secrets.SecretConfig `yaml:"kubernetes_secrets,omitempty"`
+
 	RemoteWriteConfigs []*RemoteWriteConfig `yaml:"remote_write,omitempty"`
 	RemoteReadConfigs  []*RemoteReadConfig  `yaml:"remote_read,omitempty"`
+
+	GoogleCloud *GoogleCloudConfig `yaml:"google_cloud,omitempty"`
 }
 
 // SetDirectory joins any relative file paths with dir.
@@ -1253,4 +1260,14 @@ func getGoGCEnv() int {
 		}
 	}
 	return DefaultRuntimeConfig.GoGC
+}
+
+type GoogleCloudConfig struct {
+	Export *GoogleCloudExportConfig `yaml:"export,omitempty"`
+}
+
+type GoogleCloudExportConfig struct {
+	Match           []string `yaml:"match,omitempty"`
+	Compression     *string  `yaml:"compression,omitempty"`
+	CredentialsFile *string  `yaml:"credentials,omitempty"`
 }
