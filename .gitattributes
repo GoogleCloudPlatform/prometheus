@@ -1,0 +1,3 @@
+vendor/** linguist-generated
+/**/node_modules/ linguist-generated
+go.sum linguist-generated
