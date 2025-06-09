@@ -881,7 +881,7 @@ func main() {
 				exporterOpts := opts.ExporterOpts
 				if cfg.GoogleCloud != nil && cfg.GoogleCloud.Export != nil {
 					exportConfig := cfg.GoogleCloud.Export
-					if exportConfig.Compression != nil {
+					if exportConfig.Compression != nil && *exportConfig.Compression != "" {
 						exporterOpts.Compression = *exportConfig.Compression
 					}
 					if exportConfig.Match != nil {
@@ -895,7 +895,7 @@ func main() {
 						}
 						exporterOpts.Matchers = selectors
 					}
-					if exportConfig.CredentialsFile != nil {
+					if exportConfig.CredentialsFile != nil && *exportConfig.CredentialsFile != "" {
 						exporterOpts.CredentialsFile = *exportConfig.CredentialsFile
 					}
 
