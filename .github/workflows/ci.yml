@@ -158,6 +158,8 @@ jobs:
     uses: ./.github/workflows/fuzzing.yml
     if: github.event_name == 'pull_request'
   codeql:
+    permissions:
+      security-events: write
     uses: ./.github/workflows/codeql-analysis.yml
 
   publish_main:
