@@ -16,7 +16,7 @@ on:
   push:
 jobs:
   go:
-    name: Prometheus go & npm tests
+    name: Go & npm tests
     runs-on: ubuntu-latest
     container:
       image: quay.io/prometheus/golang-builder:1.23-base
@@ -43,17 +43,5 @@ jobs:
         docker run --rm --privileged multiarch/qemu-user-static --reset --credential yes --persistent yes
         docker buildx create --name multi-arch-builder --use
         docker buildx build -t ensure-it-builds:amd64 . --platform linux/amd64 --load
-  build-image-arm64:
-    name: Ensure Google image builds (arm64)
-    timeout-minutes: 30
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    - name: Ensure forked image is buildable
-      run: |
-        docker run --rm --privileged multiarch/qemu-user-static --reset --credential yes --persistent yes
-        docker buildx create --name multi-arch-builder --use
-        docker buildx build -t ensure-it-builds:arm64 . --platform linux/arm64 --load
+        # TODO: One day we could enable this, but right now it's OOMing on free GH action.
+        # docker buildx build -t ensure-it-builds:arm64 . --platform linux/arm64 --load
