@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/efficientgo/e2e"
-	"github.com/go-kit/log"
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/go-cmp/cmp"
 	"github.com/oklog/ulid"
@@ -34,7 +33,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/timestamp"
-	"github.com/thanos-io/thanos/pkg/runutil"
+	"github.com/prometheus/prometheus/util/runutil"
 )
 
 // GCMServiceAccountOrFail gets the Google SA JSON content from GCM_SECRET
@@ -272,7 +271,7 @@ func (it *ingestionTest) FatalOnUnexpectedPromQLResults(b Backend, metric promet
 
 	var lastDiff string
 	var sameDiffTimes int
-	if err := runutil.RetryWithLog(log.NewJSONLogger(os.Stderr), 10*time.Second, ctx.Done(), func() error {
+	if err := runutil.Retry(10*time.Second, ctx.Done(), func() error {
 		value, warns, err := bMeta.api.Query(ctx, query, it.currTime.Add(1*time.Second))
 		if err != nil {
 			return fmt.Errorf("instant query %s for %v %w", query, it.currTime.Add(1*time.Second), err)

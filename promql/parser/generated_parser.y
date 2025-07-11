@@ -463,7 +463,8 @@ matrix_selector : expr LEFT_BRACKET duration RIGHT_BRACKET
 
                         if errMsg != ""{
                                 errRange := mergeRanges(&$2, &$4)
-                                yylex.(*parser).addParseErrf(errRange, errMsg)
+                                // Patching https://github.com/prometheus/prometheus/commit/9258e40589d971c0a009dccaa13462b87fb9454a
+                                yylex.(*parser).addParseErrf(errRange, "%s", errMsg)
                         }
 
                         $$ = &MatrixSelector{

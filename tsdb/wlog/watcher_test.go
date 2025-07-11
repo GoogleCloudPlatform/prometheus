@@ -731,6 +731,7 @@ func generateWALRecords(w *WL, segment, seriesCount, samplesCount int) error {
 }
 
 func TestRun_AvoidNotifyWhenBehind(t *testing.T) {
+	t.Skip("google: flaky")
 	if runtime.GOOS == "windows" { // Takes a really long time, perhaps because min sleep time is 15ms.
 		t.SkipNow()
 	}

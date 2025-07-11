@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	gcm_export "github.com/prometheus/prometheus/google/export"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/klauspost/compress/gzip"
@@ -155,8 +156,14 @@ func newScrapePool(cfg *config.ScrapeConfig, app storage.Appendable, offsetSeed 
 		}
 		opts.target.SetMetadataStore(cache)
 
+		// Inject target for propagation to the GCM export pipeline at the storage level.
+		loopCtx := gcm_export.WithMetadataFunc(ctx, func(metric string) (gcm_export.MetricMetadata, bool) {
+			md, ok := opts.target.GetMetadata(metric)
+			return gcm_export.MetricMetadata(md), ok
+		})
+
 		return newScrapeLoop(
-			ctx,
+			loopCtx,
 			opts.scraper,
 			log.With(logger, "target", opts.target),
 			buffers,
@@ -1108,33 +1115,33 @@ func (c *scrapeCache) LengthMetadata() int {
 }
 
 func newScrapeLoop(ctx context.Context,
-	sc scraper,
-	l log.Logger,
-	buffers *pool.Pool,
-	sampleMutator labelsMutator,
-	reportSampleMutator labelsMutator,
-	appender func(ctx context.Context) storage.Appender,
-	cache *scrapeCache,
-	symbolTable *labels.SymbolTable,
-	offsetSeed uint64,
-	honorTimestamps bool,
-	trackTimestampsStaleness bool,
-	enableCompression bool,
-	sampleLimit int,
-	bucketLimit int,
-	maxSchema int32,
-	labelLimits *labelLimits,
-	interval time.Duration,
-	timeout time.Duration,
-	scrapeClassicHistograms bool,
-	enableNativeHistogramIngestion bool,
-	enableCTZeroIngestion bool,
-	reportExtraMetrics bool,
-	appendMetadataToWAL bool,
-	target *Target,
-	passMetadataInContext bool,
-	metrics *scrapeMetrics,
-	skipOffsetting bool,
+		sc scraper,
+		l log.Logger,
+		buffers *pool.Pool,
+		sampleMutator labelsMutator,
+		reportSampleMutator labelsMutator,
+		appender func(ctx context.Context) storage.Appender,
+		cache *scrapeCache,
+		symbolTable *labels.SymbolTable,
+		offsetSeed uint64,
+		honorTimestamps bool,
+		trackTimestampsStaleness bool,
+		enableCompression bool,
+		sampleLimit int,
+		bucketLimit int,
+		maxSchema int32,
+		labelLimits *labelLimits,
+		interval time.Duration,
+		timeout time.Duration,
+		scrapeClassicHistograms bool,
+		enableNativeHistogramIngestion bool,
+		enableCTZeroIngestion bool,
+		reportExtraMetrics bool,
+		appendMetadataToWAL bool,
+		target *Target,
+		passMetadataInContext bool,
+		metrics *scrapeMetrics,
+		skipOffsetting bool,
 ) *scrapeLoop {
 	if l == nil {
 		l = log.NewNopLogger()

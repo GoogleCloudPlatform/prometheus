@@ -43,9 +43,11 @@ import (
 	"github.com/grafana/regexp"
 	"github.com/mwitkow/go-conntrack"
 	"github.com/oklog/run"
+	"github.com/oklog/ulid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	versioncollector "github.com/prometheus/client_golang/prometheus/collectors/version"
+	common_config "github.com/prometheus/common/config" // ?
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/promlog"
 	promlogflag "github.com/prometheus/common/promlog/flag"
@@ -81,6 +83,11 @@ import (
 	"github.com/prometheus/prometheus/util/logging"
 	prom_runtime "github.com/prometheus/prometheus/util/runtime"
 	"github.com/prometheus/prometheus/web"
+
+	// Fork specific imports.
+	"github.com/prometheus/prometheus/google/export"
+	gcm_export "github.com/prometheus/prometheus/google/export/setup"
+	"github.com/prometheus/prometheus/google/secrets"
 )
 
 var (
@@ -163,6 +170,7 @@ type flagConfig struct {
 	enableAutoGOMAXPROCS       bool
 	enableAutoGOMEMLIMIT       bool
 	enableConcurrentRuleEval   bool
+	enableKubeSecretProvider   bool
 
 	prometheusURL   string
 	corsRegexString string
@@ -231,6 +239,9 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 				config.DefaultConfig.GlobalConfig.ScrapeProtocols = config.DefaultProtoFirstScrapeProtocols
 				config.DefaultGlobalConfig.ScrapeProtocols = config.DefaultProtoFirstScrapeProtocols
 				level.Info(logger).Log("msg", "Experimental created timestamp zero ingestion enabled. Changed default scrape_protocols to prefer PrometheusProto format.", "global.scrape_protocols", fmt.Sprintf("%v", config.DefaultGlobalConfig.ScrapeProtocols))
+			case "google-kubernetes-secret-provider":
+				c.enableKubeSecretProvider = true
+				level.Info(logger).Log("msg", "Experimental (Google) Kubernetes secret provider enabled.")
 			case "":
 				continue
 			case "promql-at-modifier", "promql-negative-offset":
@@ -469,6 +480,10 @@ func main() {
 	promlogflag.AddFlags(a, &cfg.promlogConfig)
 
 	a.Flag("write-documentation", "Generate command line documentation. Internal use.").Hidden().Action(func(ctx *kingpin.ParseContext) error {
+		// Set defaults to empty to ensure this command is deterministic.
+		a.GetFlag("export.label.project-id").Default("")
+		a.GetFlag("export.label.cluster").Default("")
+		a.GetFlag("export.label.location").Default("")
 		if err := documentcli.GenerateMarkdown(a.Model(), os.Stdout); err != nil {
 			os.Exit(1)
 			return err
@@ -477,7 +492,25 @@ func main() {
 		return nil
 	}).Bool()
 
-	_, err := a.Parse(os.Args[1:])
+	// GMP fork flags.
+	var deleteDataOnStart bool
+	a.Flag("gmp.storage.delete-data-on-start", "[GMP fork experimental flag] If true, all the storage related data (e.g. blocks, lock file, WAL, head chunks) in the --storage.tsdb.path or --storage.agent.path (depending on the mode) will be deleted, right before opening the DB. As a result, all previously collected samples will be uncoverably dropped. Use it in setups where the availability is more important than the persistence between restarts, as replaying data can take time and resources. This flag is especially useful on Kubernetes with ephemeral storage (for consistency between pod vs container restart), remote write use cases that prioritize live data and when you want to auto-recover from the OOM crashloops without changing memory limits for Prometheus (see https://github.com/prometheus/prometheus/issues/13939).").
+		Default("false").BoolVar(&deleteDataOnStart)
+
+	opts := gcm_export.Opts{
+		ExporterOpts: export.ExporterOpts{
+			UserAgentProduct: fmt.Sprintf("prometheus/%s", version.Version),
+		},
+	}
+	opts.SetupFlags(a)
+
+	extraArgs, err := gcm_export.ExtraArgs()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmt.Errorf("Error parsing commandline arguments: %w", err))
+		a.Usage(os.Args[1:])
+		os.Exit(2)
+	}
+	_, err = a.Parse(append(os.Args[1:], extraArgs...))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, fmt.Errorf("Error parsing command line arguments: %w", err))
 		a.Usage(os.Args[1:])
@@ -509,6 +542,16 @@ func main() {
 	localStoragePath := cfg.serverStoragePath
 	if agentMode {
 		localStoragePath = cfg.agentStoragePath
+	}
+
+	// NOTE(bwplotka): This opt-in functionality exists in our fork, relevant
+	// discussion in the upstream is here: https://github.com/prometheus/prometheus/issues/13939
+	if deleteDataOnStart {
+		level.Info(logger).Log("msg", "The --gmp.storage.delete-data-on-start flag was set, deleting relevant storage files in the storage path", "path", localStoragePath)
+		if err := deleteStorageData(agentMode, localStoragePath); err != nil {
+			fmt.Fprintln(os.Stderr, fmt.Errorf("failed to delete storage data as requested: %w", err))
+			os.Exit(1)
+		}
 	}
 
 	cfg.web.ExternalURL, err = computeExternalURL(cfg.prometheusURL, cfg.web.ListenAddress)
@@ -651,6 +694,7 @@ func main() {
 	var (
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
+		ctxSecrets        = context.Background()
 
 		notifierManager = notifier.NewManager(&cfg.notifier, log.With(logger, "component", "notifier"))
 
@@ -724,6 +768,21 @@ func main() {
 	if err != nil {
 		level.Error(logger).Log("msg", "failed to create a scrape manager", "err", err)
 		os.Exit(1)
+	}
+
+	var secretManager *secrets.Manager
+	if cfg.enableKubeSecretProvider {
+		manager := secrets.NewManager(
+			ctxSecrets,
+			prometheus.DefaultRegisterer,
+			secrets.ProviderOptions{
+				Logger: log.With(logger, "component", "secret manager"),
+			},
+		)
+		secretManager = &manager
+		defer secretManager.Close(prometheus.DefaultRegisterer)
+
+		cfg.scrape.HTTPClientOptions = append(cfg.scrape.HTTPClientOptions, common_config.WithSecretManager(secretManager))
 	}
 
 	var (
@@ -892,6 +951,20 @@ func main() {
 				return discoveryManagerScrape.ApplyConfig(c)
 			},
 		}, {
+			name: "secret",
+			reloader: func(cfg *config.Config) error {
+				if secretManager == nil {
+					if len(cfg.SecretConfigs) > 0 {
+						return errors.New("secret providers are disabled")
+					}
+					return nil
+				}
+				kConfig := secrets.WatchSPConfig{
+					ClientConfig: cfg.ClientConfig,
+				}
+				return secretManager.ApplyConfig(&kConfig, cfg.SecretConfigs)
+			},
+		}, {
 			name:     "notify",
 			reloader: notifierManager.ApplyConfig,
 		}, {
@@ -932,6 +1005,12 @@ func main() {
 		}, {
 			name:     "tracing",
 			reloader: tracingManager.ApplyConfig,
+		}, {
+			name: "gcm_export",
+			reloader: func(cfg *config.Config) error {
+				// Call in closure to not call Global() before it's initialized below.
+				return gcm_export.Global().ApplyConfig(cfg)
+			},
 		},
 	}
 
@@ -993,6 +1072,29 @@ func main() {
 			func(err error) {
 				close(cancel)
 				webHandler.SetReady(false)
+			},
+		)
+	}
+	{
+		exporterLogger := log.With(logger, "component", "gcm_exporter")
+		ctx, cancel := context.WithCancel(context.Background())
+		exporter, err := opts.NewExporter(ctx, exporterLogger, prometheus.DefaultRegisterer)
+		if err != nil {
+			level.Error(logger).Log("msg", "Unable to init Google Cloud Monitoring exporter", "err", err)
+			os.Exit(2)
+		}
+
+		if err := gcm_export.SetGlobal(exporter); err != nil {
+			level.Error(logger).Log("msg", "Unable to set Google Cloud Monitoring exporter", "err", err)
+			os.Exit(2)
+		}
+
+		g.Add(
+			func() error {
+				return gcm_export.Global().Run()
+			},
+			func(err error) {
+				cancel()
 			},
 		)
 	}
@@ -1762,4 +1864,36 @@ type discoveryManager interface {
 	ApplyConfig(cfg map[string]discovery.Configs) error
 	Run() error
 	SyncCh() <-chan map[string][]*targetgroup.Group
+}
+
+func deleteStorageData(agentMode bool, dataPath string) error {
+	if agentMode {
+		for _, f := range []string{"wal", "lock"} {
+			if err := os.RemoveAll(filepath.Join(dataPath, f)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	files, err := os.ReadDir(dataPath)
+	if err != nil {
+		return fmt.Errorf("can't read dir %v: %w", dataPath, err)
+	}
+	for _, f := range files {
+		switch f.Name() {
+		case "wal", "lock", "chunks_head":
+			if err := os.RemoveAll(filepath.Join(dataPath, f.Name())); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := ulid.Parse(f.Name()); err == nil {
+			// It's a TSDB block, remove.
+			if err := os.RemoveAll(filepath.Join(dataPath, f.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

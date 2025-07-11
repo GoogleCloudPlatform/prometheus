@@ -53,11 +53,11 @@ func NewStorage(exporter *Exporter) *Storage {
 	return s
 }
 
-// ApplyConfig applies the new configuration to the storage. The given `ExporterOpts`, if
-// non-nil, is applied to the exporter, potentially recreating the metric client. It must be
-// defaulted and validated.
-func (s *Storage) ApplyConfig(cfg *config.Config, opts *ExporterOpts) error {
-	return s.exporter.ApplyConfig(cfg, opts)
+// ApplyConfig updates the exporter state to the given configuration. For the
+// Prometheus fork config's google_cloud entry, ExporterOpts might be
+// changed and applied to the exporter, potentially recreating the metric client.
+func (s *Storage) ApplyConfig(cfg *config.Config) error {
+	return s.exporter.ApplyConfig(cfg)
 }
 
 // Run background processing of the storage.
