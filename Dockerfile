@@ -1,24 +1,69 @@
-ARG ARCH="amd64"
-ARG OS="linux"
-FROM quay.io/prometheus/busybox-${OS}-${ARCH}:latest
-LABEL maintainer="The Prometheus Authors <prometheus-developers@googlegroups.com>"
-LABEL org.opencontainers.image.source="https://github.com/prometheus/prometheus"
+ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs
+ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.5@sha256:579ae701e259b1bb4200e2f5713751c62401220277df267c6914e06df12f1a9b
 
-ARG ARCH="amd64"
-ARG OS="linux"
-COPY .build/${OS}-${ARCH}/prometheus        /bin/prometheus
-COPY .build/${OS}-${ARCH}/promtool          /bin/promtool
+ARG IMAGE_BASE_DEBUG=gcr.io/distroless/static-debian12:debug
+ARG IMAGE_BASE=gcr.io/distroless/static-debian12:nonroot
+
+FROM ${IMAGE_BUILD_GO} AS gobase
+
+# Compile the UI assets.
+FROM ${IMAGE_BUILD_NODEJS} AS assets
+# To build the UI we need a recent node version and the go toolchain.
+RUN install_node v17.9.0
+COPY --from=gobase /usr/local/go /usr/local/
+ENV PATH="/usr/local/go/bin:${PATH}"
+WORKDIR /app
+COPY . ./
+RUN pwd
+# Only build the UI but don't run ui-install as we vendor node_modules.
+RUN make ui-build
+RUN scripts/compress_assets.sh
+RUN make npm_licenses
+
+# Build the actual Go binary.
+FROM gobase AS buildbase
+WORKDIR /app
+COPY --from=assets /app ./
+ENV GOEXPERIMENT=noboringcrypto
+ENV CGO_ENABLED=0
+ENV GOFIPS140=latest
+RUN CGO_ENABLED=0 go build \
+    -tags builtinassets -mod=vendor \
+    -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
+    -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
+    ./cmd/prometheus
+RUN CGO_ENABLED=0 go build \
+    -mod=vendor \
+    -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
+    -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
+    ./cmd/promtool
+
+# Configure distroless base image like the upstream Prometheus image.
+# Since the directory and symlink setup needs shell access, we need yet another
+# intermediate stage.
+FROM ${IMAGE_BASE_DEBUG} AS appbase
+
 COPY documentation/examples/prometheus.yml  /etc/prometheus/prometheus.yml
-COPY LICENSE                                /LICENSE
-COPY NOTICE                                 /NOTICE
-COPY npm_licenses.tar.bz2                   /npm_licenses.tar.bz2
+COPY console_libraries/                     /usr/share/prometheus/console_libraries/
+COPY consoles/                              /usr/share/prometheus/consoles/
+RUN ["/busybox/sh", "-c", "ln -s /usr/share/prometheus/console_libraries /usr/share/prometheus/consoles/ /etc/prometheus/"]
+RUN ["/busybox/sh", "-c", "mkdir -p /prometheus"]
 
-WORKDIR /prometheus
-RUN chown -R nobody:nobody /etc/prometheus /prometheus && chmod g+w /prometheus
+FROM ${IMAGE_BASE}
+
+COPY --from=buildbase /app/prometheus /bin/prometheus
+COPY --from=appbase --chown=nobody:nobody /etc/prometheus /etc/prometheus
+COPY --from=appbase --chown=nobody:nobody /prometheus /prometheus
+COPY --from=appbase /usr/share/prometheus /usr/share/prometheus
+COPY LICENSE /LICENSE
+COPY NOTICE /NOTICE
+COPY --from=assets /app/npm_licenses.tar.bz2 /npm_licenses.tar.bz2
 
 USER       nobody
 EXPOSE     9090
 VOLUME     [ "/prometheus" ]
 ENTRYPOINT [ "/bin/prometheus" ]
 CMD        [ "--config.file=/etc/prometheus/prometheus.yml", \
-             "--storage.tsdb.path=/prometheus" ]
+             "--storage.tsdb.path=/prometheus", \
+             "--web.console.libraries=/usr/share/prometheus/console_libraries", \
+             "--web.console.templates=/usr/share/prometheus/consoles" ]
