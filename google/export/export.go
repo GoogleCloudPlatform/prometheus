@@ -769,10 +769,10 @@ func MetadataFuncFromContext(ctx context.Context) (MetadataFunc, bool) {
 // MetricMetadata is a copy of MetricMetadata in Prometheus's scrape package.
 // It is copied to break a dependency cycle.
 type MetricMetadata struct {
-	Metric string
-	Type   model.MetricType
-	Help   string
-	Unit   string
+	MetricFamily string
+	Type         model.MetricType
+	Help         string
+	Unit         string
 }
 
 // MetadataFunc gets metadata for a specific metric name.

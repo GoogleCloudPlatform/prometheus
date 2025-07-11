@@ -31,6 +31,7 @@ import (
 	"time"
 	"unsafe"
 
+	gcm_export "github.com/prometheus/prometheus/google/export"
 	"github.com/klauspost/compress/gzip"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
@@ -183,8 +184,14 @@ func newScrapePool(cfg *config.ScrapeConfig, app storage.Appendable, offsetSeed 
 		}
 		opts.target.SetMetadataStore(cache)
 
+		// Inject target for propagation to the GCM export pipeline at the storage level.
+		loopCtx := gcm_export.WithMetadataFunc(ctx, func(metric string) (gcm_export.MetricMetadata, bool) {
+			md, ok := opts.target.GetMetadata(metric)
+			return gcm_export.MetricMetadata(md), ok
+		})
+
 		return newScrapeLoop(
-			ctx,
+			loopCtx,
 			opts.scraper,
 			logger.With("target", opts.target),
 			buffers,

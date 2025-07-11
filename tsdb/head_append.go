@@ -20,6 +20,9 @@ import (
 	"log/slog"
 	"math"
 
+	gcm_export "github.com/prometheus/prometheus/google/export"
+	gcm_exportsetup "github.com/prometheus/prometheus/google/export/setup"
+
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
@@ -34,8 +37,9 @@ import (
 // initAppender is a helper to initialize the time bounds of the head
 // upon the first sample it receives.
 type initAppender struct {
-	app  storage.Appender
-	head *Head
+	app          storage.Appender
+	head         *Head
+	metadataFunc gcm_export.MetadataFunc
 }
 
 var _ storage.GetRef = &initAppender{}
@@ -52,7 +56,7 @@ func (a *initAppender) Append(ref storage.SeriesRef, lset labels.Labels, t int64
 	}
 
 	a.head.initTime(t)
-	a.app = a.head.appender()
+	a.app = a.head.appender(a.metadataFunc)
 	return a.app.Append(ref, lset, t, v)
 }
 
@@ -68,7 +72,7 @@ func (a *initAppender) AppendExemplar(ref storage.SeriesRef, l labels.Labels, e 
 	// We should never reach here given we would call Append before AppendExemplar
 	// and we probably want to always base head/WAL min time on sample times.
 	a.head.initTime(e.Ts)
-	a.app = a.head.appender()
+	a.app = a.head.appender(a.metadataFunc)
 
 	return a.app.AppendExemplar(ref, l, e)
 }
@@ -78,7 +82,7 @@ func (a *initAppender) AppendHistogram(ref storage.SeriesRef, l labels.Labels, t
 		return a.app.AppendHistogram(ref, l, t, h, fh)
 	}
 	a.head.initTime(t)
-	a.app = a.head.appender()
+	a.app = a.head.appender(a.metadataFunc)
 
 	return a.app.AppendHistogram(ref, l, t, h, fh)
 }
@@ -98,7 +102,7 @@ func (a *initAppender) UpdateMetadata(ref storage.SeriesRef, l labels.Labels, m 
 		return a.app.UpdateMetadata(ref, l, m)
 	}
 
-	a.app = a.head.appender()
+	a.app = a.head.appender(a.metadataFunc)
 	return a.app.UpdateMetadata(ref, l, m)
 }
 
@@ -108,7 +112,7 @@ func (a *initAppender) AppendCTZeroSample(ref storage.SeriesRef, lset labels.Lab
 	}
 
 	a.head.initTime(t)
-	a.app = a.head.appender()
+	a.app = a.head.appender(a.metadataFunc)
 
 	return a.app.AppendCTZeroSample(ref, lset, t, ct)
 }
@@ -148,20 +152,24 @@ func (a *initAppender) Rollback() error {
 }
 
 // Appender returns a new Appender on the database.
-func (h *Head) Appender(_ context.Context) storage.Appender {
+func (h *Head) Appender(ctx context.Context) storage.Appender {
 	h.metrics.activeAppenders.Inc()
+
+	// Leave metadataFunc getter as nil if it's not contained in the context.
+	metadataFunc, _ := gcm_export.MetadataFuncFromContext(ctx)
 
 	// The head cache might not have a starting point yet. The init appender
 	// picks up the first appended timestamp as the base.
 	if !h.initialized() {
 		return &initAppender{
-			head: h,
+			head:         h,
+			metadataFunc: metadataFunc,
 		}
 	}
-	return h.appender()
+	return h.appender(metadataFunc)
 }
 
-func (h *Head) appender() *headAppender {
+func (h *Head) appender(metadataFunc gcm_export.MetadataFunc) *headAppender {
 	minValidTime := h.appendableMinValidTime()
 	appendID, cleanupAppendIDsBelow := h.iso.newAppendID(minValidTime) // Every appender gets an ID that is cleared upon commit/rollback.
 
@@ -186,6 +194,7 @@ func (h *Head) appender() *headAppender {
 		metadata:              h.getMetadataBuffer(),
 		appendID:              appendID,
 		cleanupAppendIDsBelow: cleanupAppendIDsBelow,
+		metadataFunc:          metadataFunc,
 	}
 }
 
@@ -334,6 +343,7 @@ type headAppender struct {
 	appendID, cleanupAppendIDsBelow uint64
 	closed                          bool
 	hints                           *storage.AppendOptions
+	metadataFunc gcm_export.MetadataFunc
 }
 
 func (a *headAppender) SetOptions(opts *storage.AppendOptions) {
@@ -1028,6 +1038,7 @@ type appenderCommitContext struct {
 // commitExemplars adds all exemplars from headAppender to the head's exemplar storage.
 func (a *headAppender) commitExemplars() {
 	// No errors logging to WAL, so pass the exemplars along to the in memory storage.
+	exportExemplars := make(map[storage.SeriesRef]record.RefExemplar, len(a.exemplars))
 	for _, e := range a.exemplars {
 		s := a.head.series.getByID(chunks.HeadSeriesRef(e.ref))
 		if s == nil {
@@ -1042,6 +1053,12 @@ func (a *headAppender) commitExemplars() {
 				continue
 			}
 			a.head.logger.Debug("Unknown error while adding exemplar", "err", err)
+		}
+		exportExemplars[e.ref] = record.RefExemplar{
+			Ref:    chunks.HeadSeriesRef(e.ref),
+			T:      e.exemplar.Ts,
+			V:      e.exemplar.Value,
+			Labels: e.exemplar.Labels,
 		}
 	}
 }
@@ -1513,6 +1530,9 @@ func (a *headAppender) Commit() (err error) {
 			a.head.logger.Error("Failed to log out of order samples into the WAL", "err", err)
 		}
 	}
+
+	gcm_exportsetup.Global().Export(a.metadataFunc, a.samples, exportExemplars)
+
 	return nil
 }
 

@@ -296,9 +296,9 @@ func TestCheckConfigSyntax(t *testing.T) {
 			file:       "config_with_tls_files.yml",
 			syntaxOnly: false,
 			err: "error checking client cert file \"testdata/nonexistent_cert_file.yml\": " +
-				"stat testdata/nonexistent_cert_file.yml: no such file or directory",
+					"stat testdata/nonexistent_cert_file.yml: no such file or directory",
 			errWindows: "error checking client cert file \"testdata\\\\nonexistent_cert_file.yml\": " +
-				"CreateFile testdata\\nonexistent_cert_file.yml: The system cannot find the file specified.",
+					"CreateFile testdata\\nonexistent_cert_file.yml: The system cannot find the file specified.",
 		},
 		{
 			name:       "check with syntax only succeeds with nonexistent credentials file",
@@ -312,9 +312,9 @@ func TestCheckConfigSyntax(t *testing.T) {
 			file:       "authorization_credentials_file.bad.yml",
 			syntaxOnly: false,
 			err: "error checking authorization credentials or bearer token file \"/random/file/which/does/not/exist.yml\": " +
-				"stat /random/file/which/does/not/exist.yml: no such file or directory",
+					"stat /random/file/which/does/not/exist.yml: no such file or directory",
 			errWindows: "error checking authorization credentials or bearer token file \"testdata\\\\random\\\\file\\\\which\\\\does\\\\not\\\\exist.yml\": " +
-				"CreateFile testdata\\random\\file\\which\\does\\not\\exist.yml: The system cannot find the path specified.",
+					"CreateFile testdata\\random\\file\\which\\does\\not\\exist.yml: The system cannot find the path specified.",
 		},
 	}
 	for _, test := range cases {
@@ -463,6 +463,8 @@ func TestExitCodes(t *testing.T) {
 }
 
 func TestDocumentation(t *testing.T) {
+	t.Skip("google: We don't maintain docs in our fork, so nothing to regenerate and test.")
+
 	if runtime.GOOS == "windows" {
 		t.SkipNow()
 	}

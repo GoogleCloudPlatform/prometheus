@@ -33,6 +33,8 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/sigv4"
 	"gopkg.in/yaml.v2"
+	gcm_exportconfig "github.com/prometheus/prometheus/google/export/config"
+	gcm_secrets "github.com/prometheus/prometheus/google/secrets"
 
 	"github.com/prometheus/prometheus/discovery"
 	"github.com/prometheus/prometheus/model/labels"
@@ -277,9 +279,15 @@ type Config struct {
 	StorageConfig     StorageConfig   `yaml:"storage,omitempty"`
 	TracingConfig     TracingConfig   `yaml:"tracing,omitempty"`
 
+	// Secret management:
+	gcm_secrets.ClientConfig `yaml:"kubernetes_sp_config,omitempty"`
+	SecretConfigs            []gcm_secrets.SecretConfig `yaml:"kubernetes_secrets,omitempty"`
+
 	RemoteWriteConfigs []*RemoteWriteConfig `yaml:"remote_write,omitempty"`
 	RemoteReadConfigs  []*RemoteReadConfig  `yaml:"remote_read,omitempty"`
 	OTLPConfig         OTLPConfig           `yaml:"otlp,omitempty"`
+
+	GoogleCloud gcm_exportconfig.GoogleCloudConfig `yaml:"google_cloud,omitempty"`
 
 	loaded bool // Certain methods require configuration to use Load validation.
 }
@@ -645,15 +653,15 @@ func (c *GlobalConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 // isZero returns true iff the global config is the zero value.
 func (c *GlobalConfig) isZero() bool {
 	return c.ExternalLabels.IsEmpty() &&
-		c.ScrapeInterval == 0 &&
-		c.ScrapeTimeout == 0 &&
-		c.EvaluationInterval == 0 &&
-		c.RuleQueryOffset == 0 &&
-		c.QueryLogFile == "" &&
-		c.ScrapeFailureLogFile == "" &&
-		c.ScrapeProtocols == nil &&
-		!c.ConvertClassicHistogramsToNHCB &&
-		!c.AlwaysScrapeClassicHistograms
+			c.ScrapeInterval == 0 &&
+			c.ScrapeTimeout == 0 &&
+			c.EvaluationInterval == 0 &&
+			c.RuleQueryOffset == 0 &&
+			c.QueryLogFile == "" &&
+			c.ScrapeFailureLogFile == "" &&
+			c.ScrapeProtocols == nil &&
+			!c.ConvertClassicHistogramsToNHCB &&
+			!c.AlwaysScrapeClassicHistograms
 }
 
 const DefaultGoGCPercentage = 75
@@ -1218,7 +1226,7 @@ func (c *AlertmanagerConfig) UnmarshalYAML(unmarshal func(interface{}) error) er
 	}
 
 	httpClientConfigAuthEnabled := c.HTTPClientConfig.BasicAuth != nil ||
-		c.HTTPClientConfig.Authorization != nil || c.HTTPClientConfig.OAuth2 != nil
+			c.HTTPClientConfig.Authorization != nil || c.HTTPClientConfig.OAuth2 != nil
 
 	if httpClientConfigAuthEnabled && c.SigV4Config != nil {
 		return errors.New("at most one of basic_auth, authorization, oauth2, & sigv4 must be configured")
