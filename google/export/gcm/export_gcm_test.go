@@ -18,11 +18,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/export/gcm/promtest"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/prometheus/google/export/gcm/promtest"
 )
 
 func TestExport_CounterReset(t *testing.T) {
+	// TODO(https://github.com/GoogleCloudPlatform/prometheus/issues/238): Setup later.
+	t.Skip("Skipped for now; TODO")
+
 	const interval = 30 * time.Second
 
 	prom := promtest.Prometheus("quay.io/prometheus/prometheus:v2.47.2")

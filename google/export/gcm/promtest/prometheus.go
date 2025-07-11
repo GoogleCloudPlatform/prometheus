@@ -28,12 +28,11 @@ import (
 
 	"github.com/efficientgo/e2e"
 	e2emon "github.com/efficientgo/e2e/monitoring"
-	"github.com/go-kit/log"
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	dto "github.com/prometheus/client_model/go"
-	"github.com/thanos-io/thanos/pkg/runutil"
+	"github.com/prometheus/prometheus/util/runutil"
 )
 
 type promBackend struct {
@@ -174,7 +173,7 @@ func (p *promBackend) injectScrapes(t testing.TB, scrapeRecordings [][]*dto.Metr
 	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	t.Cleanup(cancel)
 
-	if err := runutil.RetryWithLog(log.NewJSONLogger(os.Stderr), 10*time.Second, ctx.Done(), func() error {
+	if err := runutil.Retry(10*time.Second, ctx.Done(), func() error {
 		p.g.mu.Lock()
 		iter := p.g.i
 		p.g.mu.Unlock()

@@ -29,6 +29,7 @@ import (
 	gax "github.com/googleapis/gax-go/v2"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
+	exportconfig "github.com/prometheus/prometheus/google/export/config"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/record"
@@ -327,9 +328,12 @@ func TestExporter_wrapMetadata(t *testing.T) {
 type testMetricService struct {
 	monitoring_pb.MetricServiceServer // Inherit all interface methods
 	samples                           []*monitoring_pb.TimeSeries
+	sync.Mutex
 }
 
 func (srv *testMetricService) CreateTimeSeries(_ context.Context, req *monitoring_pb.CreateTimeSeriesRequest, _ ...gax.CallOption) error {
+	srv.Lock()
+	defer srv.Unlock()
 	srv.samples = append(srv.samples, req.TimeSeries...)
 	return nil
 }
@@ -339,6 +343,9 @@ func (srv *testMetricService) Close() error {
 }
 
 func (srv *testMetricService) clear() {
+	srv.Lock()
+	defer srv.Unlock()
+
 	srv.samples = []*monitoring_pb.TimeSeries{}
 }
 
@@ -373,6 +380,9 @@ func TestExporter_drainBacklog(t *testing.T) {
 	defer cancel()
 
 	pollErr := wait.PollUntilContextCancel(ctxTimeout, batchDelayMax, false, func(_ context.Context) (bool, error) {
+		metricServer.Lock()
+		defer metricServer.Unlock()
+
 		// Check that we received all samples that went in.
 		if got, want := len(metricServer.samples), wantSamples; got != want {
 			err = fmt.Errorf("got %d, want %d", got, want)
@@ -392,7 +402,9 @@ func TestApplyConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second*30)
 	defer cancel()
 
-	exporterOpts := ExporterOpts{DisableAuth: true}
+	exporterOpts := ExporterOpts{
+		DisableAuth: true,
+	}
 	exporterOpts.DefaultUnsetFields()
 	e, err := New(ctx, log.NewJSONLogger(log.NewSyncWriter(os.Stderr)), nil, exporterOpts, NopLease())
 	if err != nil {
@@ -403,7 +415,12 @@ func TestApplyConfig(t *testing.T) {
 	})
 
 	metricServer := testMetricService{}
-	e.newMetricClient = func(_ context.Context, _ ExporterOpts) (metricServiceClient, error) {
+	e.newMetricClient = func(_ context.Context, opts ExporterOpts) (metricServiceClient, error) {
+		t.Helper()
+		if opts.Compression != "gzip" {
+			// This tests if ApplConfig will update new ExporterOpts
+			t.Fatalf("expected gzip compression to be test")
+		}
 		return &metricServer, nil
 	}
 	// Sends a sample with no labels. The project label is automatically added by the
@@ -413,8 +430,12 @@ func TestApplyConfig(t *testing.T) {
 	}
 	// Tests all samples have the correct project ID label value.
 	testSamples := func(expectedProjectID string, expectedSampleCount int) {
+		t.Helper()
+
 		var err error
 		pollErr := wait.PollUntilContextCancel(ctx, batchDelayMax, false, func(_ context.Context) (bool, error) {
+			metricServer.Lock()
+			defer metricServer.Unlock()
 			switch len(metricServer.samples) {
 			case 0:
 				err = errors.New("no samples sent")
@@ -461,23 +482,51 @@ func TestApplyConfig(t *testing.T) {
 		}
 	}()
 
-	opts := ExporterOpts{ProjectID: "project-test"}
-	opts.DefaultUnsetFields()
-	if err := e.ApplyConfig(&config.Config{}, &opts); err != nil {
+	// Initial apply with compression to trigger client reload,
+	// important to actually leverage e.newMetricClient.
+	if err := e.ApplyConfig(&config.Config{
+		GlobalConfig: config.GlobalConfig{
+			ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+		},
+		GoogleCloud: exportconfig.GoogleCloudConfig{
+			Export: exportconfig.GoogleCloudExportConfig{
+				Compression: "gzip",
+			},
+		},
+	}); err != nil {
 		t.Fatalf("Initial apply: %s", err)
 	}
 	sendAndTestSamples("project-test")
 
-	opts = ExporterOpts{ProjectID: "project-abc"}
-	opts.DefaultUnsetFields()
-	if err := e.ApplyConfig(&config.Config{}, &opts); err != nil {
+	// Changing project labels should work.
+	if err := e.ApplyConfig(&config.Config{
+		GlobalConfig: config.GlobalConfig{
+			ExternalLabels: labels.FromStrings(KeyProjectID, "project-abc"),
+		},
+		GoogleCloud: exportconfig.GoogleCloudConfig{
+			Export: exportconfig.GoogleCloudExportConfig{
+				Compression: "gzip",
+			},
+		},
+	}); err != nil {
 		t.Fatalf("Initial apply: %s", err)
 	}
 	sendAndTestSamples("project-abc")
 
-	opts = ExporterOpts{ProjectID: "project-xyz"}
-	opts.DefaultUnsetFields()
-	if err := e.ApplyConfig(&config.Config{}, &opts); err != nil {
+	// Force new client to fail and ApplyConfig that should NOT create new client.
+	e.newMetricClient = func(_ context.Context, opts ExporterOpts) (metricServiceClient, error) {
+		return nil, errors.New("client should be NOT recreated")
+	}
+	if err := e.ApplyConfig(&config.Config{
+		GlobalConfig: config.GlobalConfig{
+			ExternalLabels: labels.FromStrings(KeyProjectID, "project-xyz"),
+		},
+		GoogleCloud: exportconfig.GoogleCloudConfig{
+			Export: exportconfig.GoogleCloudExportConfig{
+				Compression: "gzip",
+			},
+		},
+	}); err != nil {
 		t.Fatalf("Initial apply: %s", err)
 	}
 	sendAndTestSamples("project-xyz")
@@ -509,12 +558,8 @@ func TestDisabledExporter(t *testing.T) {
 			t.Errorf("Run exporter: %s", err)
 		}
 	}()
-	opts := ExporterOpts{
-		Disable:   true,
-		ProjectID: "project-test",
-	}
-	opts.DefaultUnsetFields()
-	if err := e.ApplyConfig(&config.Config{}, &opts); err != nil {
+
+	if err := e.ApplyConfig(&config.Config{}); err != nil {
 		t.Fatalf("Initial apply: %s", err)
 	}
 	e.Export(nil, []record.RefSample{{Ref: 1, T: int64(0), V: float64(0)}}, nil)

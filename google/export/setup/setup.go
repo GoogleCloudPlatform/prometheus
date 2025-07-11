@@ -26,13 +26,13 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
-	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
-	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/lease"
 	kingpin "github.com/alecthomas/kingpin/v2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/google/shlex"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/prometheus/google/export"
+	"github.com/prometheus/prometheus/google/lease"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -58,9 +58,10 @@ const (
 	UAModeABM         = "baremetal"
 )
 
-// Environment variable that contains additional command line arguments.
+// ExtraArgsEnvvar is a variable that contains additional command line arguments.
 // It can be used to inject additional arguments when the regular ones cannot
 // be easily modified.
+// DEPRECATED: Will be removed soon, use flags or option struct.
 const ExtraArgsEnvvar = "EXTRA_ARGS"
 
 // Generally, global state is not a good approach and actively discouraged throughout
@@ -70,9 +71,9 @@ const ExtraArgsEnvvar = "EXTRA_ARGS"
 var globalExporter *export.Exporter
 
 var ErrLocationGlobal = errors.New("location must be set to a named Google Cloud " +
-	"region and cannot be set to \"global\". please choose the " +
-	"Google Cloud region that is physically nearest to your cluster. " +
-	"see https://www.cloudinfrastructuremap.com/")
+		"region and cannot be set to \"global\". please choose the " +
+		"Google Cloud region that is physically nearest to your cluster. " +
+		"see https://www.cloudinfrastructuremap.com/")
 
 // SetGlobal sets the global instance of the GCM exporter.
 func SetGlobal(exporter *export.Exporter) (err error) {
@@ -86,8 +87,6 @@ func Global() *export.Exporter {
 		if !testing.Testing() {
 			panic("must set a global exporter")
 		}
-
-		fmt.Fprintln(os.Stderr, "No global GCM exporter was set, setting default inactive exporter.")
 
 		// We don't want to change all upstream Prometheus unit tests, so let's just create
 		// a disabled exporter. These are created on-demand to prevent race conditions

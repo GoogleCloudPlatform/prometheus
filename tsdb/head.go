@@ -30,6 +30,7 @@ import (
 	"github.com/oklog/ulid"
 	"go.uber.org/atomic"
 
+	gcm_exportsetup "github.com/prometheus/prometheus/google/export/setup"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/prometheus/prometheus/config"
@@ -289,6 +290,14 @@ func NewHead(r prometheus.Registerer, l log.Logger, wal, wbl *wlog.WL, opts *Hea
 		return nil, err
 	}
 	h.metrics = newHeadMetrics(h, r)
+
+	gcm_exportsetup.Global().SetLabelsByIDFunc(func(id storage.SeriesRef) labels.Labels {
+		series := h.series.getByID(chunks.HeadSeriesRef(id))
+		if series == nil {
+			return labels.EmptyLabels()
+		}
+		return series.lset
+	})
 
 	return h, nil
 }
@@ -1908,7 +1917,7 @@ func (s *stripeSeries) gc(mint int64, minOOOMmapRef chunks.ChunkDiskMapperRef) (
 			}
 		}
 		if len(series.mmappedChunks) > 0 || series.headChunks != nil || series.pendingCommit ||
-			(series.ooo != nil && (len(series.ooo.oooMmappedChunks) > 0 || series.ooo.oooHeadChunk != nil)) {
+				(series.ooo != nil && (len(series.ooo.oooMmappedChunks) > 0 || series.ooo.oooHeadChunk != nil)) {
 			seriesMint := series.minTime()
 			if seriesMint < actualMint {
 				actualMint = seriesMint

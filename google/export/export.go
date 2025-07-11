@@ -15,18 +15,12 @@
 package export
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"os/exec"
-	"reflect"
-	"runtime/debug"
 	"strings"
 	"sync"
-	"testing"
 	"time"
 
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
@@ -37,6 +31,7 @@ import (
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
+	"github.com/prometheus/common/version"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
@@ -47,6 +42,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding/gzip"
+)
+
+const (
+	// ClientName is used to identify the User Agent.
+	// NOTE(bwplotka): Historical name, don't change to not break analytics.
+	ClientName = "prometheus-engine-export"
 )
 
 var (
@@ -108,9 +109,9 @@ var (
 		Buckets: []float64{1, 2, 5, 10, 20, 50, 100, 150, 200},
 	})
 	ErrLocationGlobal = errors.New("location must be set to a named Google Cloud " +
-		"region and cannot be set to \"global\". please choose the " +
-		"Google Cloud region that is physically nearest to your cluster. " +
-		"see https://www.cloudinfrastructuremap.com/")
+			"region and cannot be set to \"global\". please choose the " +
+			"Google Cloud region that is physically nearest to your cluster. " +
+			"see https://www.cloudinfrastructuremap.com/")
 )
 
 type metricServiceClient interface {
@@ -191,6 +192,7 @@ type ExporterOpts struct {
 	// A user agent product string added to the regular user agent.
 	// See: https://www.rfc-editor.org/rfc/rfc7231#section-5.5.3
 	UserAgentProduct string
+
 	// A string added as a suffix to the regular user agent.
 	UserAgentMode string
 	// UserAgentEnv where calls to GCM API are made.
@@ -248,13 +250,6 @@ func (opts *ExporterOpts) DefaultUnsetFields() {
 	if opts.UserAgentMode == "" {
 		opts.UserAgentMode = "unspecified"
 	}
-}
-
-func (opts *ExporterOpts) Validate() error {
-	if opts.Efficiency.BatchSize > BatchSizeMax {
-		return fmt.Errorf("maximum supported batch size is %d, got %d", BatchSizeMax, opts.Efficiency.BatchSize)
-	}
-	return nil
 }
 
 // EfficiencyOpts represents exporter options that allows fine-tuning of
@@ -319,14 +314,12 @@ func (alwaysLease) OnLeaderChange(func()) {
 }
 
 func defaultNewMetricClient(ctx context.Context, opts ExporterOpts) (metricServiceClient, error) {
-	version, err := Version()
-	if err != nil {
-		return nil, fmt.Errorf("unable to fetch user agent version: %w", err)
-	}
-
 	// Identity User Agent for all gRPC requests.
 	ua := strings.TrimSpace(fmt.Sprintf("%s/%s %s (env:%s;mode:%s)",
-		ClientName, version, opts.UserAgentProduct, opts.UserAgentEnv, opts.UserAgentMode))
+		// NOTE(bwplotka): Before go/gmp:fork-toil this was naturally inaccurate
+		// GMP version -- currently it will be Prometheus version which is also, by default, part of the
+		// opts.UserAgentProduct.
+		ClientName, version.Version, opts.UserAgentProduct, opts.UserAgentEnv, opts.UserAgentMode))
 
 	clientOpts := []option.ClientOption{
 		option.WithGRPCDialOption(grpc.WithUnaryInterceptor(grpc_prometheus.UnaryClientInterceptor)),
@@ -399,8 +392,8 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 		)
 	}
 
-	if err := opts.Validate(); err != nil {
-		return nil, err
+	if opts.Efficiency.BatchSize > BatchSizeMax {
+		return nil, fmt.Errorf("maximum supported batch size is %d, got %d", BatchSizeMax, opts.Efficiency.BatchSize)
 	}
 	if lease == nil {
 		lease = NopLease()
@@ -446,10 +439,10 @@ const (
 	KeyInstance  = "instance"
 )
 
-// ApplyConfig updates the exporter state to the given configuration. The given `ExporterOpts`,
-// if non-nil, is applied to the exporter, potentially recreating the metric client. It must be
-// defaulted and validated.
-func (e *Exporter) ApplyConfig(cfg *config.Config, opts *ExporterOpts) (err error) {
+// ApplyConfig updates the exporter state to the given configuration. For the
+// Prometheus fork config's google_cloud entry, ExporterOpts might be
+// changed and applied to the exporter, potentially recreating the metric client.
+func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
 	// Note: We don't expect the NopExporter to call this. Only the config reloader calls it.
 	e.mtx.Lock()
 	defer e.mtx.Unlock()
@@ -459,13 +452,18 @@ func (e *Exporter) ApplyConfig(cfg *config.Config, opts *ExporterOpts) (err erro
 	// amount of time to reduce load when multiple requests are made to the same server in
 	// succession. In our case, we might send a CMP call every 50ms at the worst case, which is
 	// highly likely to benefit from the persistent TPC connection.
-	optsChanged := false
-	if opts != nil {
-		optsChanged = !reflect.DeepEqual(e.opts, opts)
-		if optsChanged {
-			e.opts = *opts
-		}
+	recreateClient := false
+
+	// Process potential export opts change.
+	if cfg.GoogleCloud.Export.Compression != e.opts.Compression {
+		e.opts.Compression = cfg.GoogleCloud.Export.Compression
+		recreateClient = true
 	}
+	if cfg.GoogleCloud.Export.CredentialsFile != e.opts.CredentialsFile {
+		e.opts.CredentialsFile = cfg.GoogleCloud.Export.CredentialsFile
+		recreateClient = true
+	}
+	// NOTE(bwplotka): Matchers are deprecated, see https://github.com/GoogleCloudPlatform/prometheus-engine/pull/1688
 
 	lset := createLabelSet(cfg, &e.opts)
 	labelsChanged := !labels.Equal(e.externalLabels, lset)
@@ -480,7 +478,7 @@ func (e *Exporter) ApplyConfig(cfg *config.Config, opts *ExporterOpts) (err erro
 	}
 
 	// If changed, or we're calling this for the first time, we need to recreate the client.
-	if optsChanged {
+	if recreateClient {
 		e.metricClient, err = e.newMetricClient(e.ctx, e.opts)
 		if err != nil {
 			return fmt.Errorf("create metric client: %w", err)
@@ -625,72 +623,6 @@ func (e *Exporter) triggerNext() {
 	case e.nextc <- struct{}{}:
 	default:
 	}
-}
-
-const (
-	// ClientName is used to identify the User Agent.
-	ClientName = "prometheus-engine-export"
-	// mainModuleVersion is the version of the main module. Align with git tag.
-	// TODO(TheSpiritXIII): Remove with https://github.com/golang/go/issues/50603
-	mainModuleVersion = "v0.15.0-rc.7" // x-release-please-version
-	// mainModuleName is the name of the main module. Align with go.mod.
-	mainModuleName = "github.com/GoogleCloudPlatform/prometheus-engine"
-)
-
-// Version is used in the User Agent. This version is automatically detected if
-// this function is imported as a library. However, the version is statically
-// set if this function is used in a binary in prometheus-engine due to Golang
-// restrictions. While testing, the static version is validated for correctness.
-func Version() (string, error) {
-	if testing.Testing() {
-		// TODO(TheSpiritXIII): After https://github.com/golang/go/issues/50603 just return an empty
-		// string here. For now, use the opportunity to confirm that the static version is correct.
-		// We manually get the closest git tag if the user is running the unit test locally, but
-		// fallback to the GIT_TAG environment variable in case the user is running the test via
-		// Docker (like `make test` does by default).
-		if testTag, found := os.LookupEnv("TEST_TAG"); !found || testTag == "false" {
-			return mainModuleVersion, nil
-		}
-		cmd := exec.Command("git", "describe", "--tags", "--abbrev=0")
-		var stdout bytes.Buffer
-		cmd.Stdout = &stdout
-
-		version := ""
-		if err := cmd.Run(); err != nil {
-			version = strings.TrimSpace(os.Getenv("GIT_TAG"))
-			if version == "" {
-				return "", errors.New("unable to detect git tag, please set GIT_TAG env variable")
-			}
-		} else {
-			version = strings.TrimSpace(stdout.String())
-		}
-
-		return version, nil
-	}
-
-	// TODO(TheSpiritXIII): Due to https://github.com/golang/go/issues/50603 we must use a static
-	// string for the main module (when we import this function locally for binaries).
-
-	bi, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "", errors.New("unable to retrieve build info")
-	}
-
-	if bi.Main.Path == mainModuleName {
-		return mainModuleVersion, nil
-	}
-
-	var exportDep *debug.Module
-	for _, dep := range bi.Deps {
-		if dep.Path == mainModuleName {
-			exportDep = dep
-			break
-		}
-	}
-	if exportDep == nil {
-		return "", fmt.Errorf("unable to find module %q %v", mainModuleName, bi.Deps)
-	}
-	return exportDep.Version, nil
 }
 
 // Run sends exported samples to Google Cloud Monitoring. Must be called at most once.
@@ -1029,8 +961,8 @@ func (b *batch) empty() bool {
 // send the accumulated samples to their respective projects. It returns once all
 // requests have completed and notifies the pending shards.
 func (b *batch) send(
-	ctx context.Context,
-	sendOne func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error,
+		ctx context.Context,
+		sendOne func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error,
 ) {
 	// Set timeout so slow requests in the batch do not block overall progress indefinitely.
 	sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)

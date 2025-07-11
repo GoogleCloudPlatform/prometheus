@@ -87,8 +87,17 @@ func (p *queryLogTest) setQueryLog(t *testing.T, queryLogFile string) {
 	require.NoError(t, err)
 	_, err = p.configFile.Seek(0, 0)
 	require.NoError(t, err)
+	commonGlobal := `
+  # GMP requires settings project_id and location labels.
+  external_labels:
+    project_id: example-project
+    location: us-central-1
+`
 	if queryLogFile != "" {
-		_, err = p.configFile.Write([]byte(fmt.Sprintf("global:\n  query_log_file: %s\n", queryLogFile)))
+		_, err = p.configFile.Write([]byte(fmt.Sprintf("global:\n  query_log_file: %s\n%s", queryLogFile, commonGlobal)))
+		require.NoError(t, err)
+	} else {
+		_, err = p.configFile.Write([]byte(fmt.Sprintf("global:\n%s", commonGlobal)))
 		require.NoError(t, err)
 	}
 	_, err = p.configFile.Write([]byte(p.configuration()))
@@ -256,6 +265,7 @@ func (p *queryLogTest) run(t *testing.T) {
 		"--web.enable-lifecycle",
 		fmt.Sprintf("--web.listen-address=%s:%d", p.host, p.port),
 		"--storage.tsdb.path=" + dir,
+		"--export.debug.disable-auth",
 	}, p.params()...)
 
 	prom := exec.Command(promPath, params...)

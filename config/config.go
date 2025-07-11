@@ -31,6 +31,8 @@ import (
 	"github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/sigv4"
+	gcm_exportconfig "github.com/prometheus/prometheus/google/export/config"
+	gcm_secrets "github.com/prometheus/prometheus/google/secrets"
 	"gopkg.in/yaml.v2"
 
 	"github.com/prometheus/prometheus/discovery"
@@ -240,8 +242,14 @@ type Config struct {
 	StorageConfig     StorageConfig   `yaml:"storage,omitempty"`
 	TracingConfig     TracingConfig   `yaml:"tracing,omitempty"`
 
+	// Secret management:
+	gcm_secrets.ClientConfig `yaml:"kubernetes_sp_config,omitempty"`
+	SecretConfigs            []gcm_secrets.SecretConfig `yaml:"kubernetes_secrets,omitempty"`
+
 	RemoteWriteConfigs []*RemoteWriteConfig `yaml:"remote_write,omitempty"`
 	RemoteReadConfigs  []*RemoteReadConfig  `yaml:"remote_read,omitempty"`
+
+	GoogleCloud gcm_exportconfig.GoogleCloudConfig `yaml:"google_cloud,omitempty"`
 }
 
 // SetDirectory joins any relative file paths with dir.
@@ -572,12 +580,12 @@ func (c *GlobalConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 // isZero returns true iff the global config is the zero value.
 func (c *GlobalConfig) isZero() bool {
 	return c.ExternalLabels.IsEmpty() &&
-		c.ScrapeInterval == 0 &&
-		c.ScrapeTimeout == 0 &&
-		c.EvaluationInterval == 0 &&
-		c.RuleQueryOffset == 0 &&
-		c.QueryLogFile == "" &&
-		c.ScrapeProtocols == nil
+			c.ScrapeInterval == 0 &&
+			c.ScrapeTimeout == 0 &&
+			c.EvaluationInterval == 0 &&
+			c.RuleQueryOffset == 0 &&
+			c.QueryLogFile == "" &&
+			c.ScrapeProtocols == nil
 }
 
 // RuntimeConfig configures the values for the process behavior.
@@ -997,7 +1005,7 @@ func (c *AlertmanagerConfig) UnmarshalYAML(unmarshal func(interface{}) error) er
 	}
 
 	httpClientConfigAuthEnabled := c.HTTPClientConfig.BasicAuth != nil ||
-		c.HTTPClientConfig.Authorization != nil || c.HTTPClientConfig.OAuth2 != nil
+			c.HTTPClientConfig.Authorization != nil || c.HTTPClientConfig.OAuth2 != nil
 
 	if httpClientConfigAuthEnabled && c.SigV4Config != nil {
 		return fmt.Errorf("at most one of basic_auth, authorization, oauth2, & sigv4 must be configured")
@@ -1107,7 +1115,7 @@ func (c *RemoteWriteConfig) UnmarshalYAML(unmarshal func(interface{}) error) err
 	}
 
 	httpClientConfigAuthEnabled := c.HTTPClientConfig.BasicAuth != nil ||
-		c.HTTPClientConfig.Authorization != nil || c.HTTPClientConfig.OAuth2 != nil
+			c.HTTPClientConfig.Authorization != nil || c.HTTPClientConfig.OAuth2 != nil
 
 	if httpClientConfigAuthEnabled && (c.SigV4Config != nil || c.AzureADConfig != nil) {
 		return fmt.Errorf("at most one of basic_auth, authorization, oauth2, sigv4, & azuread must be configured")

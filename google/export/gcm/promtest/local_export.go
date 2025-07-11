@@ -41,8 +41,8 @@ import (
 	"golang.org/x/oauth2"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
-	"github.com/GoogleCloudPlatform/prometheus-engine/pkg/export"
 	"github.com/go-kit/log"
+	"github.com/prometheus/prometheus/google/export"
 	"golang.org/x/oauth2/google"
 )
 
@@ -110,7 +110,7 @@ func (l *localExportWithGCM) start(t testing.TB, _ e2e.Environment) (v1.API, map
 	}
 
 	// Apply empty config, so resources labels are attached.
-	if err := l.e.ApplyConfig(&config.DefaultConfig, nil); err != nil {
+	if err := l.e.ApplyConfig(&config.DefaultConfig); err != nil {
 		t.Fatalf("apply config: %v", err)
 	}
 	l.e.SetLabelsByIDFunc(func(ref storage.SeriesRef) labels.Labels {
