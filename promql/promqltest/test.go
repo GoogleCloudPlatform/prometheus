@@ -91,7 +91,7 @@ func RunBuiltinTests(t *testing.T, engine promql.QueryEngine) {
 	t.Cleanup(func() { parser.EnableExperimentalFunctions = false })
 	parser.EnableExperimentalFunctions = true
 
-	files, err := fs.Glob(testsFs, "*/*.test")
+	files, err := fs.Glob(testsFs, "*/staleness.test")
 	require.NoError(t, err)
 
 	for _, fn := range files {

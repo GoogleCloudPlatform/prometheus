@@ -133,10 +133,10 @@ func (e *seriesCacheEntry) setNextRefresh() {
 }
 
 func newSeriesCache(
-	logger log.Logger,
-	reg prometheus.Registerer,
-	metricTypePrefix string,
-	matchers Matchers,
+		logger log.Logger,
+		reg prometheus.Registerer,
+		metricTypePrefix string,
+		matchers Matchers,
 ) *seriesCache {
 	if logger == nil {
 		logger = log.NewNopLogger()
@@ -255,6 +255,7 @@ func (c *seriesCache) get(s record.RefSample, externalLabels labels.Labels, meta
 // getResetAdjusted takes a sample for a referenced series and returns
 // its reset timestamp and adjusted value.
 // If the last return argument is false, the sample should be dropped.
+// TODO(bwplotka): Support staleness
 func (c *seriesCache) getResetAdjusted(ref storage.SeriesRef, t int64, v float64) (int64, float64, bool) {
 	c.mtx.Lock()
 	e, ok := c.entries[ref]

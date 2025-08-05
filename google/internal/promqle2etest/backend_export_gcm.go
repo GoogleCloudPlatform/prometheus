@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ import (
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/textparse"
 	"github.com/prometheus/prometheus/model/timestamp"
+	"github.com/prometheus/prometheus/model/value"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/chunks"
 	"github.com/prometheus/prometheus/tsdb/record"
@@ -60,6 +62,8 @@ import (
 type LocalExportGCMBackend struct {
 	Name  string
 	GCMSA []byte
+
+	YOLOStalenessInjection bool
 }
 
 func (l LocalExportGCMBackend) Ref() string { return l.Name }
@@ -128,6 +132,7 @@ func (l LocalExportGCMBackend) StartAndWaitReady(t testing.TB, _ e2e.Environment
 			"project_id": creds.ProjectID,
 			"collector":  "local-export-gcm",
 		},
+		YOLOStalenessInjection: l.YOLOStalenessInjection,
 	}
 }
 
@@ -138,7 +143,8 @@ type runningLocalExportWithGCM struct {
 	e *export.Exporter
 
 	// NOTE(bwplotka): Not guarded by mutex, so it has to be synced with Exporter.Export.
-	labelsByRef map[storage.SeriesRef]labels.Labels
+	labelsByRef            map[storage.SeriesRef]labels.Labels
+	YOLOStalenessInjection bool
 }
 
 func (l *runningLocalExportWithGCM) API() v1.API {
@@ -152,12 +158,26 @@ func (l *runningLocalExportWithGCM) CollectionLabels() map[string]string {
 func (l *runningLocalExportWithGCM) IngestSamples(ctx context.Context, t testing.TB, recorded [][]*dto.MetricFamily) {
 	t.Helper()
 
+	metadata := map[string]export.MetricMetadata{}
+
 	st := labels.NewSymbolTable()
-	for _, mfs := range recorded {
+	for i, mfs := range recorded {
 		if ctx.Err() != nil {
 			return // cancel
 		}
 		if len(mfs) == 0 {
+			continue
+		}
+
+		if l.YOLOStalenessInjection && i == len(recorded)-1 {
+			// YOLO, hack on last "scrape".
+			l.e.Export(func(metric string) (export.MetricMetadata, bool) {
+				m, ok := metadata[metric]
+				return m, ok
+			}, []record.RefSample{{
+				// Yolo.
+				Ref: chunks.HeadSeriesRef(0), V: math.Float64frombits(value.StaleNaN), T: mfs[0].Metric[0].GetTimestampMs(),
+			}}, nil)
 			continue
 		}
 

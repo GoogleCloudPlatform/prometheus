@@ -165,7 +165,7 @@ const (
 	batchDelayMax = 50 * time.Millisecond
 
 	// Prefix for GCM metric.
-	MetricTypePrefix = "prometheus.googleapis.com"
+	MetricTypePrefix = "custom.googleapis.com" // "prometheus.googleapis.com"
 )
 
 // Supported gRPC compression formats.
@@ -985,6 +985,8 @@ func (b *batch) send(
 			defer pendingRequests.Dec()
 
 			samplesPerRPCBatch.Observe(float64(len(l)))
+
+			fmt.Printf("DEBUG: Sending CreateTimeSeriesRequest.TimeSeries %v\n", l)
 
 			// We do not retry any requests due to the risk of producing a backlog
 			// that cannot be worked down, especially if large amounts of clients try to do so.

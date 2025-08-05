@@ -70,14 +70,17 @@ func discardExemplarIncIfExists(series storage.SeriesRef, exemplars map[storage.
 }
 
 type sampleBuilder struct {
+	allowStalenessMarkers bool
+
 	series *seriesCache
 	dists  map[uint64]*distribution
 }
 
 func newSampleBuilder(c *seriesCache) *sampleBuilder {
 	return &sampleBuilder{
-		series: c,
-		dists:  make(map[uint64]*distribution, 128),
+		allowStalenessMarkers: true, // TODO(bwplotka): Hack, make it a proper ff.
+		series:                c,
+		dists:                 make(map[uint64]*distribution, 128),
 	}
 }
 
@@ -94,8 +97,7 @@ func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels
 	sample := samples[0]
 	tailSamples := samples[1:]
 
-	// Staleness markers are currently not supported by Cloud Monitoring.
-	if value.IsStaleNaN(sample.V) {
+	if value.IsStaleNaN(sample.V) && !b.allowStalenessMarkers {
 		prometheusSamplesDiscarded.WithLabelValues("staleness-marker").Inc()
 		discardExemplarIncIfExists(storage.SeriesRef(sample.Ref), exemplars, "staleness-marker")
 		return nil, tailSamples, nil
@@ -384,12 +386,12 @@ func isHistogramSeries(metric, name string) bool {
 // Once all series for a single distribution have been observed, it returns it.
 // It returns the reset timestamp along with the distribution and the remaining samples.
 func (b *sampleBuilder) buildDistribution(
-	metric string,
-	_ labels.Labels,
-	samples []record.RefSample,
-	exemplars map[storage.SeriesRef]record.RefExemplar,
-	externalLabels labels.Labels,
-	metadata MetadataFunc,
+		metric string,
+		_ labels.Labels,
+		samples []record.RefSample,
+		exemplars map[storage.SeriesRef]record.RefExemplar,
+		externalLabels labels.Labels,
+		metadata MetadataFunc,
 ) (*distribution_pb.Distribution, int64, []record.RefSample, error) {
 	// The Prometheus/OpenMetrics exposition format does not require all histogram series for a single distribution
 	// to be grouped together. But it does require that all series for a histogram metric in general are grouped

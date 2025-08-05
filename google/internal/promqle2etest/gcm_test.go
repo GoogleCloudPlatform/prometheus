@@ -341,3 +341,80 @@ func TestExportGCM_PrometheusGauge(t *testing.T) {
 	t.Cleanup(cancel)
 	pt.Run(ctx)
 }
+
+// TestExportGCM_Staleness tests a gauge staleness behaviour.
+func TestExportGCM_Staleness(t *testing.T) {
+	const interval = 15 * time.Second
+
+	_, _, localExportGCM := setupBackends(t)
+	localExportGCM.YOLOStalenessInjection = true // This causes last recorded sample to be NaN.
+
+	pt := promqle2e.NewScrapeStyleTest(t)
+	pt.SetCurrentTime(time.Now().Add(-10 * time.Minute)) // We only do a few scrapes, so -10m buffer is enough.
+
+	//nolint:promlinter // Test metric.
+	gauge := promauto.With(pt.Registerer()).NewGaugeVec(prometheus.GaugeOpts{
+		Name:        "promqle2e_test_gauge_staleness_total",
+		Help:        "Test gauge used by promqle2e test framework for acceptance tests.",
+		ConstLabels: map[string]string{"repo": "github.com/GoogleCloudPlatform/prometheus"},
+	}, []string{"foo"})
+	var g prometheus.Gauge
+
+	// No metric expected, gaugeVec empty.
+	pt.RecordScrape(interval)
+
+	g = gauge.WithLabelValues("bar")
+	g.Set(200)
+	pt.RecordScrape(interval).
+		Expect(g, 200, localExportGCM)
+
+	// Staleness will be injected here (last scrape).
+	pt.RecordScrape(interval)
+	// PromQL, even raw instant query for range vector, does not return NaNs.
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	t.Cleanup(cancel)
+	pt.Run(ctx)
+}
+
+// TestExportGCM_Staleness tests a gauge staleness behaviour.
+func TestExportGCM_StalenessCounter(t *testing.T) {
+	const interval = 15 * time.Second
+
+	_, _, localExportGCM := setupBackends(t)
+	localExportGCM.YOLOStalenessInjection = true // This causes last recorded sample to be NaN.
+
+	pt := promqle2e.NewScrapeStyleTest(t)
+	pt.SetCurrentTime(time.Now().Add(-10 * time.Minute)) // We only do a few scrapes, so -10m buffer is enough.
+
+	//nolint:promlinter // Test metric.
+	counter := promauto.With(pt.Registerer()).NewCounterVec(prometheus.CounterOpts{
+		Name:        "promqle2e_test_counter_staleness_total",
+		Help:        "Test counter used by promqle2e test framework for acceptance tests.",
+		ConstLabels: map[string]string{"repo": "github.com/GoogleCloudPlatform/prometheus"},
+	}, []string{"foo"})
+	var c prometheus.Counter
+
+	// No metric expected, gaugeVec empty.
+	pt.RecordScrape(interval)
+
+	c = counter.WithLabelValues("bar")
+	c.Add(0)
+	pt.RecordScrape(interval)
+	c.Add(200)
+	pt.RecordScrape(interval).
+		Expect(c, 200, localExportGCM)
+	c.Add(200)
+	pt.RecordScrape(interval).
+		Expect(c, 400, localExportGCM)
+	c.Add(200)
+	pt.RecordScrape(interval).
+		Expect(c, 600, localExportGCM)
+	// Staleness will be injected!
+	pt.RecordScrape(interval)
+	// PromQL, even raw instant query for range vector, does not return NaNs.
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	t.Cleanup(cancel)
+	pt.Run(ctx)
+}
