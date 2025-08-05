@@ -47,6 +47,31 @@ jobs:
         
         docker run --rm --privileged multiarch/qemu-user-static --reset --credential yes --persistent yes
         docker buildx create --name multi-arch-builder --use
-        docker buildx build -t ensure-it-builds:amd64 . --platform linux/amd64 --load
+        docker buildx build -t gmp-prometheus:amd64 . --platform linux/amd64 --load
         # TODO: One day we could enable this, but right now it's OOMing on free GH action.
         # docker buildx build -t ensure-it-builds:arm64 . --platform linux/arm64 --load
+    - name: Save Docker image as a tar archive
+      run: docker save gmp-prometheus:amd64 -o image.tar
+    - name: Upload Docker image artifact for the next tests
+      uses: actions/upload-artifact@v4
+      with:
+        name: gmp-prometheus-amd64
+        path: image.tar
+  test-export-gcm:
+    name: GCM e2e tests
+    runs-on: ubuntu-latest
+    # This job now depends on build-image-amd64 and will run only after it succeeds.
+    needs: build-image-amd64
+    steps:
+    - uses: actions/checkout@v4
+    - name: Download Docker image artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: gmp-prometheus-amd64
+    - name: Load Docker image
+      run: docker load -i image.tar
+    - name: Run export GCM tests
+      env:
+        GCM_SECRET: ${{ secrets.GCM_SECRET }}
+        GMP_PROMETHEUS_IMAGE: "gmp-prometheus:amd64"
+      run: make -C ./google/internal/promqle2etest test
