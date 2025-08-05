@@ -1,4 +1,4 @@
-// Copyright 2024 Google LLC
+// Copyright 2025 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package promtest
+package promqle2etest
 
 import (
 	"bytes"
@@ -26,12 +26,15 @@ import (
 
 	gcm "cloud.google.com/go/monitoring/apiv3/v2"
 	"github.com/efficientgo/e2e"
+	"github.com/go-kit/log"
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"github.com/prometheus/compliance/promqle2e"
 	"github.com/prometheus/prometheus/config"
+	"github.com/prometheus/prometheus/google/export"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/textparse"
 	"github.com/prometheus/prometheus/model/timestamp"
@@ -39,22 +42,10 @@ import (
 	"github.com/prometheus/prometheus/tsdb/chunks"
 	"github.com/prometheus/prometheus/tsdb/record"
 	"golang.org/x/oauth2"
-	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
-
-	"github.com/go-kit/log"
-	"github.com/prometheus/prometheus/google/export"
 	"golang.org/x/oauth2/google"
 )
 
-type localExportWithGCM struct {
-	gcmSA []byte
-
-	e *export.Exporter
-	// NOTE(bwplotka): Not guarded by mutex, so it has to be synced with Exporter.Export.
-	labelsByRef map[storage.SeriesRef]labels.Labels
-}
-
-// LocalExportWithGCM represents locally imported export pkg with GCM as a
+// LocalExportGCMBackend represents locally imported export pkg with GCM as a
 // backend. In particular this backend is mimicking our GMP collector, while
 // allowing quickest feedback loop for experiment and using IDE debuggers.
 //
@@ -66,25 +57,24 @@ type localExportWithGCM struct {
 // * Internal Prometheus parser (https://pkg.go.dev/github.com/prometheus/prometheus/pkg/textparse).
 // * Internal Prometheus TSDB (head block) dto (e.g. records https://pkg.go.dev/github.com/prometheus/prometheus@v0.47.2/tsdb/record).
 // * GCM monitoring API proto ingested by Monarch.
-func LocalExportWithGCM(gcmSA []byte) Backend {
-	return &localExportWithGCM{gcmSA: gcmSA}
+type LocalExportGCMBackend struct {
+	Name  string
+	GCMSA []byte
 }
 
-func (l *localExportWithGCM) Ref() string { return "export-pkg-with-gcm" }
+func (l LocalExportGCMBackend) Ref() string { return l.Name }
 
-func (l *localExportWithGCM) start(t testing.TB, _ e2e.Environment) (v1.API, map[string]string) {
+func (l LocalExportGCMBackend) StartAndWaitReady(t testing.TB, _ e2e.Environment) promqle2e.RunningBackend {
 	t.Helper()
 
-	ctx, cancel := context.WithCancel(signals.SetupSignalHandler())
-	t.Cleanup(cancel)
+	ctx := t.Context()
 
-	creds, err := google.CredentialsFromJSON(ctx, l.gcmSA, gcm.DefaultAuthScopes()...)
+	creds, err := google.CredentialsFromJSON(ctx, l.GCMSA, gcm.DefaultAuthScopes()...)
 	if err != nil {
 		t.Fatalf("create credentials from JSON: %s", err)
 	}
 
-	l.labelsByRef = map[storage.SeriesRef]labels.Labels{}
-
+	// Fake, does not matter.
 	cluster := "pe-github-action"
 	location := "europe-west3-a"
 
@@ -101,39 +91,76 @@ func (l *localExportWithGCM) start(t testing.TB, _ e2e.Environment) (v1.API, map
 		Cluster:             cluster,
 		Location:            location,
 		ProjectID:           creds.ProjectID,
-		CredentialsFromJSON: l.gcmSA,
+		CredentialsFromJSON: l.GCMSA,
 	}
 	exporterOpts.DefaultUnsetFields()
-	l.e, err = export.New(ctx, log.NewJSONLogger(os.Stderr), nil, exporterOpts, export.NopLease())
+	e, err := export.New(ctx, log.NewJSONLogger(os.Stderr), nil, exporterOpts, export.NopLease())
 	if err != nil {
 		t.Fatalf("create exporter: %v", err)
 	}
 
 	// Apply empty config, so resources labels are attached.
-	if err := l.e.ApplyConfig(&config.DefaultConfig); err != nil {
+	if err := e.ApplyConfig(&config.DefaultConfig); err != nil {
 		t.Fatalf("apply config: %v", err)
 	}
-	l.e.SetLabelsByIDFunc(func(ref storage.SeriesRef) labels.Labels {
-		return l.labelsByRef[ref]
+
+	labelsByRef := map[storage.SeriesRef]labels.Labels{}
+	e.SetLabelsByIDFunc(func(ref storage.SeriesRef) labels.Labels {
+		_, ok := labelsByRef[ref]
+		if !ok {
+			fmt.Println("not found")
+		}
+		return labelsByRef[ref]
 	})
 
 	go func() {
-		if err := l.e.Run(); err != nil {
+		if err := e.Run(); err != nil {
 			t.Logf("running exporter: %s", err)
 		}
 	}()
-
-	return v1.NewAPI(cl), map[string]string{
-		"cluster":    cluster,
-		"location":   location,
-		"project_id": creds.ProjectID,
+	return &runningLocalExportWithGCM{
+		api:         v1.NewAPI(cl),
+		e:           e,
+		labelsByRef: labelsByRef,
+		collectionLabels: map[string]string{
+			"cluster":    cluster,
+			"location":   location,
+			"project_id": creds.ProjectID,
+			"collector":  "local-export-gcm",
+		},
 	}
 }
 
-func (l *localExportWithGCM) injectScrapes(t testing.TB, scrapeRecordings [][]*dto.MetricFamily, _ time.Duration) {
+type runningLocalExportWithGCM struct {
+	api              v1.API
+	collectionLabels map[string]string
+
+	e *export.Exporter
+
+	// NOTE(bwplotka): Not guarded by mutex, so it has to be synced with Exporter.Export.
+	labelsByRef map[storage.SeriesRef]labels.Labels
+}
+
+func (l *runningLocalExportWithGCM) API() v1.API {
+	return l.api
+}
+
+func (l *runningLocalExportWithGCM) CollectionLabels() map[string]string {
+	return l.collectionLabels
+}
+
+func (l *runningLocalExportWithGCM) IngestSamples(ctx context.Context, t testing.TB, recorded [][]*dto.MetricFamily) {
 	t.Helper()
 
-	for _, mfs := range scrapeRecordings {
+	st := labels.NewSymbolTable()
+	for _, mfs := range recorded {
+		if ctx.Err() != nil {
+			return // cancel
+		}
+		if len(mfs) == 0 {
+			continue
+		}
+
 		// Encode gathered metric family as proto Prometheus exposition format, decode as internal
 		// Prometheus textparse format to have metrics how Prometheus would have
 		// before append. We don't use dto straight away due to quite complex code
@@ -151,7 +178,7 @@ func (l *localExportWithGCM) injectScrapes(t testing.TB, scrapeRecordings [][]*d
 				t.Fatal(err)
 			}
 		}
-		tp, err := textparse.New(b.Bytes(), string(expfmt.NewFormat(expfmt.TypeProtoDelim)), true, labels.NewSymbolTable())
+		tp, err := textparse.New(b.Bytes(), string(expfmt.NewFormat(expfmt.TypeProtoDelim)), true, st)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,9 +186,7 @@ func (l *localExportWithGCM) injectScrapes(t testing.TB, scrapeRecordings [][]*d
 		// Iterate over textparse parser results and mimic Prometheus scrape loop
 		// with exporter.Export injection.
 
-		// It's fine to start ref from 0 and clean labelsByRef for every Export invocation,
-		// as exporter does not need to further (after conversions).
-		l.labelsByRef = map[storage.SeriesRef]labels.Labels{}
+		// It's fine to start ref from 0 for every "scrape".
 		ref := uint64(0)
 
 		var (
@@ -211,6 +236,8 @@ func (l *localExportWithGCM) injectScrapes(t testing.TB, scrapeRecordings [][]*d
 
 			lset := labels.New()
 			_ = tp.Metric(&lset)
+			// Add manually an 'external label' that will allow us to filter by the backend.
+			lset = labels.NewBuilder(lset).Set("collector", "local-export-gcm").Labels()
 			l.labelsByRef[storage.SeriesRef(ref)] = lset
 
 			batch = append(batch, record.RefSample{
@@ -218,7 +245,6 @@ func (l *localExportWithGCM) injectScrapes(t testing.TB, scrapeRecordings [][]*d
 			})
 			ref++
 		}
-
 		l.e.Export(func(metric string) (export.MetricMetadata, bool) {
 			m, ok := metadata[metric]
 			return m, ok

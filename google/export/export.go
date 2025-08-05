@@ -455,11 +455,11 @@ func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
 	recreateClient := false
 
 	// Process potential export opts change.
-	if cfg.GoogleCloud.Export.Compression != e.opts.Compression {
+	if cfg.GoogleCloud.Export.Compression != "" && cfg.GoogleCloud.Export.Compression != e.opts.Compression {
 		e.opts.Compression = cfg.GoogleCloud.Export.Compression
 		recreateClient = true
 	}
-	if cfg.GoogleCloud.Export.CredentialsFile != e.opts.CredentialsFile {
+	if cfg.GoogleCloud.Export.CredentialsFile != "" && cfg.GoogleCloud.Export.CredentialsFile != e.opts.CredentialsFile {
 		e.opts.CredentialsFile = cfg.GoogleCloud.Export.CredentialsFile
 		recreateClient = true
 	}
@@ -548,7 +548,7 @@ func (e *Exporter) SetLabelsByIDFunc(f func(storage.SeriesRef) labels.Labels) {
 
 // Export enqueues the samples and exemplars to be written to Cloud Monitoring.
 func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample, exemplarMap map[storage.SeriesRef]record.RefExemplar) {
-	// Wether we're sending data or not, add batchsize of samples exported by
+	// Whether we're sending data or not, add batchsize of samples exported by
 	// Prometheus from appender commit.
 	batchSize := len(batch)
 	samplesExported.Add(float64(batchSize))
@@ -740,6 +740,10 @@ func (e *Exporter) Run() error {
 func (e *Exporter) close() {
 	e.mtx.Lock()
 	defer e.mtx.Unlock()
+	if e.metricClient == nil {
+		return
+	}
+
 	if err := e.metricClient.Close(); err != nil {
 		_ = e.logger.Log("msg", "error closing metric client", "err", err)
 	}
