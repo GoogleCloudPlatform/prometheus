@@ -27,15 +27,18 @@ package promqle2etest
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
 
+	gcm "cloud.google.com/go/monitoring/apiv3/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/compliance/promqle2e"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2/google"
 )
 
 // gcmServiceAccountOrFail gets the Google SA JSON content from GCM_SECRET
@@ -340,4 +343,84 @@ func TestExportGCM_PrometheusGauge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	t.Cleanup(cancel)
 	pt.Run(ctx)
+}
+
+func TestExportGCM_MetricHelpIngestion(t *testing.T) {
+	const (
+		interval = 15 * time.Second
+		mName    = "promqle2e_test_gauge_help_total"
+	)
+
+	_, _, localExportGCM := setupBackends(t)
+
+	pt := promqle2e.NewScrapeStyleTest(t)
+	pt.SetCurrentTime(time.Now().Add(-10 * time.Minute)) // We only do a few scrapes, so -10m buffer is enough.
+
+	//nolint:promlinter // Test metric.
+	gauge := promauto.With(pt.Registerer()).NewGaugeVec(prometheus.GaugeOpts{
+		Name:        mName,
+		Help:        "Test gauge used by promqle2e test framework for acceptance tests.",
+		ConstLabels: map[string]string{"repo": "github.com/GoogleCloudPlatform/prometheus"},
+	}, []string{"foo"})
+	var g prometheus.Gauge
+
+	// No metric expected, gaugeVec empty.
+	pt.RecordScrape(interval)
+
+	g = gauge.WithLabelValues("bar")
+	g.Set(200)
+	pt.RecordScrape(interval).
+		Expect(g, 200, localExportGCM)
+
+	g.Sub(10)
+	pt.RecordScrape(interval).
+		Expect(g, 190, localExportGCM)
+
+	g.Add(40)
+	pt.RecordScrape(interval).
+		Expect(g, 230, localExportGCM)
+
+	// Reset to 0 (simulating instrumentation resetting metric or restarting target).
+	gauge.Reset()
+	g = gauge.WithLabelValues("bar")
+	pt.RecordScrape(interval).
+		Expect(g, 0, localExportGCM)
+
+	// Transform the recorded data to change metric HELP/description on every scrape
+	// to test the worst case scenario.
+	pt.Transform(func(recordings [][]*dto.MetricFamily) [][]*dto.MetricFamily {
+		for i := range recordings {
+			for j := range recordings[i] {
+				if recordings[i][j].Help == nil {
+					t.Fatalf("we expect Prometheus SDK to pass metric help correctly, but it's nil for %v", recordings[i][j].GetName())
+				}
+				*recordings[i][j].Help = fmt.Sprintf("%s-changed(%d)", *recordings[i][j].Help, i)
+			}
+		}
+		return recordings
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	t.Cleanup(cancel)
+	pt.Run(ctx)
+
+	// Verify the help.
+	ctx = t.Context()
+	creds, err := google.CredentialsFromJSON(ctx, localExportGCM.GCMSA, gcm.DefaultAuthScopes()...)
+	if err != nil {
+		t.Fatalf("create credentials from JSON: %s", err)
+	}
+	api, err := createPromClientAgainstGCM(ctx, creds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mds, err := api.Metadata(ctx, mName, "1")
+	if err != nil {
+		t.Fatalf("getting metadata failed: %v", err)
+	}
+	m, ok := mds[mName]
+	if !ok {
+		t.Fatalf("expected %v metric not found", mName)
+	}
+	fmt.Println(m)
 }

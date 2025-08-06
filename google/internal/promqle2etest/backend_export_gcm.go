@@ -64,27 +64,33 @@ type LocalExportGCMBackend struct {
 
 func (l LocalExportGCMBackend) Ref() string { return l.Name }
 
-func (l LocalExportGCMBackend) StartAndWaitReady(t testing.TB, _ e2e.Environment) promqle2e.RunningBackend {
-	t.Helper()
-
-	ctx := t.Context()
-
-	creds, err := google.CredentialsFromJSON(ctx, l.GCMSA, gcm.DefaultAuthScopes()...)
-	if err != nil {
-		t.Fatalf("create credentials from JSON: %s", err)
-	}
-
-	// Fake, does not matter.
-	cluster := "pe-github-action"
-	location := "europe-west3-a"
-
+func createPromClientAgainstGCM(ctx context.Context, creds *google.Credentials) (v1.API, error) {
 	cl, err := api.NewClient(api.Config{
 		Address: fmt.Sprintf("https://monitoring.googleapis.com/v1/projects/%s/location/global/prometheus", creds.ProjectID),
 		Client:  oauth2.NewClient(ctx, creds.TokenSource),
 	})
 	if err != nil {
-		t.Fatalf("create Prometheus client: %s", err)
+		return nil, fmt.Errorf("create Prometheus client: %s", err)
 	}
+	return v1.NewAPI(cl), nil
+}
+
+func (l LocalExportGCMBackend) StartAndWaitReady(t testing.TB, _ e2e.Environment) promqle2e.RunningBackend {
+	t.Helper()
+
+	ctx := t.Context()
+	creds, err := google.CredentialsFromJSON(ctx, l.GCMSA, gcm.DefaultAuthScopes()...)
+	if err != nil {
+		t.Fatalf("create credentials from JSON: %s", err)
+	}
+	api, err := createPromClientAgainstGCM(ctx, creds)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fake, does not matter.
+	cluster := "pe-github-action"
+	location := "europe-west3-a"
 
 	exporterOpts := export.ExporterOpts{
 		UserAgentEnv:        "pe-github-action-test",
@@ -92,6 +98,7 @@ func (l LocalExportGCMBackend) StartAndWaitReady(t testing.TB, _ e2e.Environment
 		Location:            location,
 		ProjectID:           creds.ProjectID,
 		CredentialsFromJSON: l.GCMSA,
+		PopulateDescription: true,
 	}
 	exporterOpts.DefaultUnsetFields()
 	e, err := export.New(ctx, log.NewJSONLogger(os.Stderr), nil, exporterOpts, export.NopLease())
@@ -119,7 +126,7 @@ func (l LocalExportGCMBackend) StartAndWaitReady(t testing.TB, _ e2e.Environment
 		}
 	}()
 	return &runningLocalExportWithGCM{
-		api:         v1.NewAPI(cl),
+		api:         api,
 		e:           e,
 		labelsByRef: labelsByRef,
 		collectionLabels: map[string]string{

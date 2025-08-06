@@ -64,6 +64,14 @@ type seriesCache struct {
 
 	// Prefix under which metrics are written to GCM.
 	metricTypePrefix string
+
+	// Feature flag that controls passing the HELP of the metric as a GCM
+	// metric description. This was historically not done to avoid the GCM
+	// limitation in handling description changes, often possible in OSS metric
+	// world (Prometheus, Otel). As of 2025 Q1 this has been now fixed, but
+	// we maintain feature flag so we can rollback on scale in case of the
+	// handling issues.
+	populateDescription bool
 }
 
 type seriesCacheEntry struct {
@@ -133,21 +141,23 @@ func (e *seriesCacheEntry) setNextRefresh() {
 }
 
 func newSeriesCache(
-	logger log.Logger,
-	reg prometheus.Registerer,
-	metricTypePrefix string,
-	matchers Matchers,
+		logger log.Logger,
+		reg prometheus.Registerer,
+		metricTypePrefix string,
+		matchers Matchers,
+		populateDescription bool,
 ) *seriesCache {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
 	return &seriesCache{
-		logger:           logger,
-		now:              time.Now,
-		pool:             newPool(reg),
-		entries:          map[storage.SeriesRef]*seriesCacheEntry{},
-		matchers:         matchers,
-		metricTypePrefix: metricTypePrefix,
+		logger:              logger,
+		now:                 time.Now,
+		pool:                newPool(reg),
+		entries:             map[storage.SeriesRef]*seriesCacheEntry{},
+		matchers:            matchers,
+		metricTypePrefix:    metricTypePrefix,
+		populateDescription: populateDescription,
 	}
 }
 
@@ -393,12 +403,13 @@ func (c *seriesCache) populate(ref storage.SeriesRef, entry *seriesCacheEntry, e
 		metricLabels = metricLabelsBuilder.Labels()
 	}
 
-	newSeries := func(mtype string, kind metric_pb.MetricDescriptor_MetricKind, vtype metric_pb.MetricDescriptor_ValueType) hashedSeries {
+	newSeries := func(mType, mHelp string, kind metric_pb.MetricDescriptor_MetricKind, vtype metric_pb.MetricDescriptor_ValueType) hashedSeries {
 		s := &monitoring_pb.TimeSeries{
-			Resource:   resource,
-			Metric:     &metric_pb.Metric{Type: mtype, Labels: metricLabels.Map()},
-			MetricKind: kind,
-			ValueType:  vtype,
+			Resource:    resource,
+			Metric:      &metric_pb.Metric{Type: mType, Labels: metricLabels.Map()},
+			MetricKind:  kind,
+			ValueType:   vtype,
+			Description: mHelp,
 		}
 		return hashedSeries{hash: hashSeries(s), proto: s}
 	}
@@ -408,44 +419,58 @@ func (c *seriesCache) populate(ref storage.SeriesRef, entry *seriesCacheEntry, e
 	case model.MetricTypeCounter:
 		protos.cumulative = newSeries(
 			c.getMetricType(metricName, gcmMetricSuffixCounter, gcmMetricSuffixNone),
+			metadata.Help,
 			metric_pb.MetricDescriptor_CUMULATIVE,
-			metric_pb.MetricDescriptor_DOUBLE)
+			metric_pb.MetricDescriptor_DOUBLE,
+		)
 
 	case model.MetricTypeGauge:
 		protos.gauge = newSeries(
 			c.getMetricType(metricName, gcmMetricSuffixGauge, gcmMetricSuffixNone),
+			metadata.Help,
 			metric_pb.MetricDescriptor_GAUGE,
-			metric_pb.MetricDescriptor_DOUBLE)
+			metric_pb.MetricDescriptor_DOUBLE,
+		)
 
 	case model.MetricTypeUnknown:
 		protos.gauge = newSeries(
 			c.getMetricType(metricName, gcmMetricSuffixUnknown, gcmMetricSuffixNone),
+			metadata.Help,
 			metric_pb.MetricDescriptor_GAUGE,
-			metric_pb.MetricDescriptor_DOUBLE)
+			metric_pb.MetricDescriptor_DOUBLE,
+		)
 		protos.cumulative = newSeries(
 			c.getMetricType(metricName, gcmMetricSuffixUnknown, gcmMetricSuffixCounter),
+			metadata.Help,
 			metric_pb.MetricDescriptor_CUMULATIVE,
-			metric_pb.MetricDescriptor_DOUBLE)
+			metric_pb.MetricDescriptor_DOUBLE,
+		)
 
 	case model.MetricTypeSummary:
 		switch suffix {
 		case metricSuffixSum:
 			protos.cumulative = newSeries(
 				c.getMetricType(metricName, gcmMetricSuffixSummary, gcmMetricSuffixCounter),
+				metadata.Help,
 				metric_pb.MetricDescriptor_CUMULATIVE,
-				metric_pb.MetricDescriptor_DOUBLE)
+				metric_pb.MetricDescriptor_DOUBLE,
+			)
 
 		case metricSuffixCount:
 			protos.cumulative = newSeries(
 				c.getMetricType(metricName, gcmMetricSuffixSummary, gcmMetricSuffixNone),
+				metadata.Help,
 				metric_pb.MetricDescriptor_CUMULATIVE,
-				metric_pb.MetricDescriptor_DOUBLE)
+				metric_pb.MetricDescriptor_DOUBLE,
+			)
 
 		case metricSuffixNone: // Actual quantiles.
 			protos.gauge = newSeries(
 				c.getMetricType(metricName, gcmMetricSuffixSummary, gcmMetricSuffixNone),
+				metadata.Help,
 				metric_pb.MetricDescriptor_GAUGE,
-				metric_pb.MetricDescriptor_DOUBLE)
+				metric_pb.MetricDescriptor_DOUBLE,
+			)
 
 		default:
 			return fmt.Errorf("unexpected metric name suffix %q for metric %q", suffix, metricName)
@@ -454,8 +479,10 @@ func (c *seriesCache) populate(ref storage.SeriesRef, entry *seriesCacheEntry, e
 	case model.MetricTypeHistogram:
 		protos.cumulative = newSeries(
 			c.getMetricType(baseMetricName, gcmMetricSuffixHistogram, gcmMetricSuffixNone),
+			metadata.Help,
 			metric_pb.MetricDescriptor_CUMULATIVE,
-			metric_pb.MetricDescriptor_DISTRIBUTION)
+			metric_pb.MetricDescriptor_DISTRIBUTION,
+		)
 
 	default:
 		return fmt.Errorf("unexpected metric type %s for metric %q", metadata.Type, metricName)

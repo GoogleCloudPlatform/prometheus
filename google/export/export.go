@@ -224,6 +224,11 @@ type ExporterOpts struct {
 	// internal data structure sizes. Only for advance users. No compatibility
 	// guarantee (might change in future).
 	Efficiency EfficiencyOpts
+
+	// Feature flags.
+	// PopulateDescription controls the help -> description setting.
+	// TODO(bwplotka): Promote this flag to have default "true" if we gain confidence.
+	PopulateDescription bool
 }
 
 // DefaultUnsetFields defaults any zero-valued fields.
@@ -405,11 +410,13 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 	}
 
 	e := &Exporter{
-		logger:               logger,
-		ctx:                  ctx,
-		opts:                 opts,
-		metricClient:         metricClient,
-		seriesCache:          newSeriesCache(logger, reg, opts.MetricTypePrefix, opts.Matchers),
+		logger:       logger,
+		ctx:          ctx,
+		opts:         opts,
+		metricClient: metricClient,
+		// TODO(bwpotka): Consider recreation on ApplyConfig for hot-reloading support.
+		// See related discussion in
+		seriesCache:          newSeriesCache(logger, reg, opts.MetricTypePrefix, opts.Matchers, opts.PopulateDescription),
 		externalLabels:       createLabelSet(&config.Config{}, &opts),
 		newMetricClient:      defaultNewMetricClient,
 		nextc:                make(chan struct{}, 1),
