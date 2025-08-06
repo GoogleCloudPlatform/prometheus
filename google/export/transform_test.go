@@ -102,8 +102,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/gauge",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 3},
@@ -129,8 +130,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/gauge",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 4},
@@ -171,8 +173,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/unknown",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 3},
@@ -198,8 +201,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/unknown",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 4},
@@ -225,8 +229,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/unknown:counter",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 3},
@@ -241,7 +246,7 @@ func TestSampleBuilder(t *testing.T) {
 		}, {
 			doc: "convert counter (Prometheus format metadata key)",
 			metadata: testMetadataFunc(metricMetadataMap{
-				"metric1_total": {Type: model.MetricTypeCounter, Help: "metric1 help text"},
+				"metric1_total": {Type: model.MetricTypeCounter, Help: "metric1_total help text"},
 			}),
 			series: seriesMap{
 				123: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_total", "k1", "v1"),
@@ -271,8 +276,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_total/counter",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1_total help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 2},
@@ -299,8 +305,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_total/counter",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1_total help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 2},
@@ -329,8 +336,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_total/counter",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1_total help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 4, Nanos: 999000000},
@@ -345,7 +353,7 @@ func TestSampleBuilder(t *testing.T) {
 		}, {
 			doc: "convert counter - skip duplicates (OpenMetrics format metadata key)",
 			metadata: testMetadataFunc(metricMetadataMap{
-				"metric1": {Type: model.MetricTypeCounter, Help: "metric1 help text"},
+				"metric1": {Type: model.MetricTypeCounter, Help: "metric1_total help text"},
 			}),
 			series: seriesMap{
 				123: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_total", "k1", "v1"),
@@ -381,8 +389,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_total/counter",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1_total help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 2},
@@ -411,8 +420,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_total/counter",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1_total help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 4, Nanos: 999000000},
@@ -440,8 +450,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_total/counter",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1_total help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 4, Nanos: 999000000},
@@ -509,8 +520,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/summary",
 						Labels: map[string]string{"quantile": "0.5"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 2},
@@ -537,8 +549,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_sum/summary:counter",
 						Labels: map[string]string{},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 2},
@@ -565,8 +578,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_count/summary",
 						Labels: map[string]string{},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 3},
@@ -593,8 +607,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/summary",
 						Labels: map[string]string{"quantile": "0.9"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 4},
@@ -645,8 +660,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/summary",
 						Labels: map[string]string{"quantile": "0.5"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 2},
@@ -674,8 +690,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_count/summary",
 						Labels: map[string]string{},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 3},
@@ -702,8 +719,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/summary",
 						Labels: map[string]string{"quantile": "0.9"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 4},
@@ -799,8 +817,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/histogram",
 						Labels: map[string]string{},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DISTRIBUTION,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
@@ -842,8 +861,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/histogram",
 						Labels: map[string]string{"a": "b"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DISTRIBUTION,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
@@ -884,8 +904,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_a_count/gauge",
 						Labels: map[string]string{"a": "b"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1_a_count help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 1},
@@ -987,8 +1008,9 @@ func TestSampleBuilder(t *testing.T) {
 					Metric: &metric_pb.Metric{
 						Type: "prometheus.googleapis.com/metric1/histogram",
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DISTRIBUTION,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
@@ -1054,8 +1076,9 @@ func TestSampleBuilder(t *testing.T) {
 					Metric: &metric_pb.Metric{
 						Type: "prometheus.googleapis.com/metric1/histogram",
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DISTRIBUTION,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
@@ -1138,8 +1161,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/gauge",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 1},
@@ -1164,8 +1188,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/gauge",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 2},
@@ -1191,8 +1216,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/gauge",
 						Labels: map[string]string{"k1": "v4"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_GAUGE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							EndTime: &timestamp_pb.Timestamp{Seconds: 1},
@@ -1249,8 +1275,9 @@ func TestSampleBuilder(t *testing.T) {
 					Metric: &metric_pb.Metric{
 						Type: "prometheus.googleapis.com/metric1/histogram",
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DISTRIBUTION,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
@@ -1394,8 +1421,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1/histogram",
 						Labels: map[string]string{},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DISTRIBUTION,
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
@@ -1460,7 +1488,7 @@ func TestSampleBuilder(t *testing.T) {
 		{
 			doc: "convert counter with exemplars (exemplars should be dropped)",
 			metadata: testMetadataFunc(metricMetadataMap{
-				"metric1_total": {Type: model.MetricTypeCounter, Help: "metric1 help text"},
+				"metric1_total": {Type: model.MetricTypeCounter, Help: "metric1_total help text"},
 			}),
 			series: seriesMap{
 				123: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_total", "k1", "v1"),
@@ -1497,8 +1525,9 @@ func TestSampleBuilder(t *testing.T) {
 						Type:   "prometheus.googleapis.com/metric1_total/counter",
 						Labels: map[string]string{"k1": "v1"},
 					},
-					MetricKind: metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:  metric_pb.MetricDescriptor_DOUBLE,
+					Description: "metric1_total help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
 					Points: []*monitoring_pb.Point{{
 						Interval: &monitoring_pb.TimeInterval{
 							StartTime: &timestamp_pb.Timestamp{Seconds: 2},
