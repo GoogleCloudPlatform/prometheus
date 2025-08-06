@@ -64,14 +64,6 @@ type seriesCache struct {
 
 	// Prefix under which metrics are written to GCM.
 	metricTypePrefix string
-
-	// Feature flag that controls passing the HELP of the metric as a GCM
-	// metric description. This was historically not done to avoid the GCM
-	// limitation in handling description changes, often possible in OSS metric
-	// world (Prometheus, Otel). As of 2025 Q1 this has been now fixed, but
-	// we maintain feature flag so we can rollback on scale in case of the
-	// handling issues.
-	populateDescription bool
 }
 
 type seriesCacheEntry struct {
@@ -141,23 +133,21 @@ func (e *seriesCacheEntry) setNextRefresh() {
 }
 
 func newSeriesCache(
-		logger log.Logger,
-		reg prometheus.Registerer,
-		metricTypePrefix string,
-		matchers Matchers,
-		populateDescription bool,
+	logger log.Logger,
+	reg prometheus.Registerer,
+	metricTypePrefix string,
+	matchers Matchers,
 ) *seriesCache {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
 	return &seriesCache{
-		logger:              logger,
-		now:                 time.Now,
-		pool:                newPool(reg),
-		entries:             map[storage.SeriesRef]*seriesCacheEntry{},
-		matchers:            matchers,
-		metricTypePrefix:    metricTypePrefix,
-		populateDescription: populateDescription,
+		logger:           logger,
+		now:              time.Now,
+		pool:             newPool(reg),
+		entries:          map[storage.SeriesRef]*seriesCacheEntry{},
+		matchers:         matchers,
+		metricTypePrefix: metricTypePrefix,
 	}
 }
 

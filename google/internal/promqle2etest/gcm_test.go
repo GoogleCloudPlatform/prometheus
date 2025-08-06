@@ -33,6 +33,10 @@ import (
 	"time"
 
 	gcm "cloud.google.com/go/monitoring/apiv3/v2"
+	"github.com/efficientgo/core/runutil"
+	"github.com/go-kit/log"
+	"github.com/google/go-cmp/cmp"
+	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	dto "github.com/prometheus/client_model/go"
@@ -304,7 +308,7 @@ func TestExportGCM_PrometheusGauge(t *testing.T) {
 
 	//nolint:promlinter // Test metric.
 	gauge := promauto.With(pt.Registerer()).NewGaugeVec(prometheus.GaugeOpts{
-		Name:        "promqle2e_test_gauge_total",
+		Name:        "promqle2e_test_gauge",
 		Help:        "Test gauge used by promqle2e test framework for acceptance tests.",
 		ConstLabels: map[string]string{"repo": "github.com/GoogleCloudPlatform/prometheus"},
 	}, []string{"foo"})
@@ -348,7 +352,7 @@ func TestExportGCM_PrometheusGauge(t *testing.T) {
 func TestExportGCM_MetricHelpIngestion(t *testing.T) {
 	const (
 		interval = 15 * time.Second
-		mName    = "promqle2e_test_gauge_help_total"
+		mName    = "promqle2e_test_gauge_help"
 	)
 
 	_, _, localExportGCM := setupBackends(t)
@@ -404,23 +408,43 @@ func TestExportGCM_MetricHelpIngestion(t *testing.T) {
 	t.Cleanup(cancel)
 	pt.Run(ctx)
 
-	// Verify the help.
-	ctx = t.Context()
-	creds, err := google.CredentialsFromJSON(ctx, localExportGCM.GCMSA, gcm.DefaultAuthScopes()...)
-	if err != nil {
-		t.Fatalf("create credentials from JSON: %s", err)
-	}
-	api, err := createPromClientAgainstGCM(ctx, creds)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mds, err := api.Metadata(ctx, mName, "1")
-	if err != nil {
-		t.Fatalf("getting metadata failed: %v", err)
-	}
-	m, ok := mds[mName]
-	if !ok {
-		t.Fatalf("expected %v metric not found", mName)
-	}
-	fmt.Println(m)
+	// NOTE: Because pt.Run schedules t.Run cases in parallel, this code won't wait for pt.Run to finish
+	// and has to use t.Run and t.Parallel as well.
+	// TODO(bwplotka): Add more flexibility in the promqle2etest framework to control this,
+	// current state is confusing and can pass for wrong reasons (e.g. this metric written by other test).
+	// Good enough for now.
+	t.Run("validate help", func(t *testing.T) {
+		t.Parallel()
+
+		creds, err := google.CredentialsFromJSON(ctx, localExportGCM.GCMSA, gcm.DefaultAuthScopes()...)
+		if err != nil {
+			t.Fatalf("create credentials from JSON: %s", err)
+		}
+		api, err := createPromClientAgainstGCM(ctx, creds)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := runutil.RetryWithLog(log.NewJSONLogger(os.Stderr), 10*time.Second, ctx.Done(), func() error {
+			mds, err := api.Metadata(ctx, mName, "20")
+			if err != nil {
+				return fmt.Errorf("getting metadata failed: %w", err)
+			}
+			m, ok := mds[mName]
+			if !ok {
+				return fmt.Errorf("expected %v metric not found in the returned metadata", mName)
+			}
+			diff := cmp.Diff([]v1.Metadata{
+				{Type: v1.MetricTypeGauge, Help: "Test gauge used by promqle2e test framework for acceptance tests.-changed(1)"},
+			}, m)
+			if diff != "" {
+				// Abort, no point repeating.
+				t.Errorf("resulted Matrix is different than expected: %v\n", diff)
+				return nil
+			}
+			return nil
+		}); err != nil {
+			t.Error(err)
+		}
+	})
 }
