@@ -98,7 +98,6 @@ func (l LocalExportGCMBackend) StartAndWaitReady(t testing.TB, _ e2e.Environment
 		Location:            location,
 		ProjectID:           creds.ProjectID,
 		CredentialsFromJSON: l.GCMSA,
-		PopulateDescription: true,
 	}
 	exporterOpts.DefaultUnsetFields()
 	e, err := export.New(ctx, log.NewJSONLogger(os.Stderr), nil, exporterOpts, export.NopLease())
