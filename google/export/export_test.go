@@ -29,7 +29,7 @@ import (
 	gax "github.com/googleapis/gax-go/v2"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
-	exportconfig "github.com/prometheus/prometheus/google/export/config"
+	gcmconfig "github.com/prometheus/prometheus/google/config"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/record"
@@ -488,8 +488,8 @@ func TestApplyConfig(t *testing.T) {
 		GlobalConfig: config.GlobalConfig{
 			ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
 		},
-		GoogleCloud: exportconfig.GoogleCloudConfig{
-			Export: exportconfig.GoogleCloudExportConfig{
+		GoogleCloud: gcmconfig.GoogleCloudConfig{
+			Export: gcmconfig.GoogleCloudExportConfig{
 				Compression: "gzip",
 			},
 		},
@@ -503,8 +503,8 @@ func TestApplyConfig(t *testing.T) {
 		GlobalConfig: config.GlobalConfig{
 			ExternalLabels: labels.FromStrings(KeyProjectID, "project-abc"),
 		},
-		GoogleCloud: exportconfig.GoogleCloudConfig{
-			Export: exportconfig.GoogleCloudExportConfig{
+		GoogleCloud: gcmconfig.GoogleCloudConfig{
+			Export: gcmconfig.GoogleCloudExportConfig{
 				Compression: "gzip",
 			},
 		},
@@ -521,8 +521,8 @@ func TestApplyConfig(t *testing.T) {
 		GlobalConfig: config.GlobalConfig{
 			ExternalLabels: labels.FromStrings(KeyProjectID, "project-xyz"),
 		},
-		GoogleCloud: exportconfig.GoogleCloudConfig{
-			Export: exportconfig.GoogleCloudExportConfig{
+		GoogleCloud: gcmconfig.GoogleCloudConfig{
+			Export: gcmconfig.GoogleCloudExportConfig{
 				Compression: "gzip",
 			},
 		},

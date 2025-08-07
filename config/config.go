@@ -31,7 +31,7 @@ import (
 	"github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/sigv4"
-	gcm_exportconfig "github.com/prometheus/prometheus/google/export/config"
+	gcmconfig "github.com/prometheus/prometheus/google/config"
 	gcm_secrets "github.com/prometheus/prometheus/google/secrets"
 	"gopkg.in/yaml.v2"
 
@@ -249,7 +249,7 @@ type Config struct {
 	RemoteWriteConfigs []*RemoteWriteConfig `yaml:"remote_write,omitempty"`
 	RemoteReadConfigs  []*RemoteReadConfig  `yaml:"remote_read,omitempty"`
 
-	GoogleCloud gcm_exportconfig.GoogleCloudConfig `yaml:"google_cloud,omitempty"`
+	GoogleCloud gcmconfig.GoogleCloudConfig `yaml:"google_cloud,omitempty"`
 }
 
 // SetDirectory joins any relative file paths with dir.
