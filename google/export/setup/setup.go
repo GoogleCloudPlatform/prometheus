@@ -204,6 +204,10 @@ type HAOptions struct {
 	KubeConfigFile string
 	KubeNamespace  string
 	KubeName       string
+
+	LeaseDuration time.Duration
+	RenewDeadline time.Duration
+	RetryPeriod   time.Duration
 }
 
 // DefaultUnsetFields defaults any zero-valued fields.
@@ -231,6 +235,17 @@ func (opts *HAOptions) SetupFlags(a *kingpin.Application) {
 		Default(opts.KubeName).
 		OverrideDefaultFromEnvar("KUBE_NAME").
 		StringVar(&opts.KubeName)
+	a.Flag("export.ha.lease-duration", "Duration that non-leader replicas will wait before trying to acquire the lease. Optional. Defaults to 15s.").
+		OverrideDefaultFromEnvar("LEASE_DURATION").
+		DurationVar(&opts.LeaseDuration)
+
+	a.Flag("export.ha.renew-deadline", "Duration that the leader will retry refreshing the lease before giving up. Optional. Defaults to 10s.").
+		OverrideDefaultFromEnvar("RENEW_DEADLINE").
+		DurationVar(&opts.RenewDeadline)
+
+	a.Flag("export.ha.retry-period", "Duration between lease renewal retries. Optional. Defaults to 2s.").
+		OverrideDefaultFromEnvar("RETRY_PERIOD").
+		DurationVar(&opts.RetryPeriod)
 }
 
 func (opts *HAOptions) NewLease(logger log.Logger, reg prometheus.Registerer) (export.Lease, error) {
@@ -244,13 +259,18 @@ func (opts *HAOptions) NewLease(logger log.Logger, reg prometheus.Registerer) (e
 		if err != nil {
 			return nil, fmt.Errorf("loading kube config failed: %w", err)
 		}
+		leaseOpts := &lease.Options{
+			LeaseDuration: opts.LeaseDuration,
+			RenewDeadline: opts.RenewDeadline,
+			RetryPeriod:   opts.RetryPeriod,
+		}
 		lease, err := lease.NewKubernetes(
 			logger,
 			reg,
 			kubecfg,
 			opts.KubeNamespace,
 			opts.KubeName,
-			&lease.Options{},
+			leaseOpts,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("set up Kubernetes lease: %w", err)
