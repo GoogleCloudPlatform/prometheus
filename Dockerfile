@@ -52,6 +52,7 @@ RUN ["/busybox/sh", "-c", "mkdir -p /prometheus"]
 FROM ${IMAGE_BASE}
 
 COPY --from=buildbase /app/prometheus /bin/prometheus
+COPY --from=buildbase /app/promtool /bin/promtool
 COPY --from=appbase --chown=nobody:nobody /etc/prometheus /etc/prometheus
 COPY --from=appbase --chown=nobody:nobody /prometheus /prometheus
 COPY --from=appbase /usr/share/prometheus /usr/share/prometheus
