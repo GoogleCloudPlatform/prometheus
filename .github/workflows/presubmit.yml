@@ -77,3 +77,8 @@ jobs:
         GCM_SECRET: ${{ secrets.GCM_SECRET }}
         GMP_PROMETHEUS_IMAGE: "gmp-prometheus:amd64"
       run: make -C ./google/internal/promqle2etest test
+    - name: Run prw2gcm GCM tests
+      env:
+        GCM_SECRET: ${{ secrets.GCM_SECRET }}
+        GMP_PROMETHEUS_IMAGE: "gmp-prometheus:amd64"
+      run: make -C ./google/cmd/prw2gcm test

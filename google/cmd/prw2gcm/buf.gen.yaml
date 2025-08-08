@@ -1,0 +1,21 @@
+# buf.gen.yaml
+version: v2
+
+plugins:
+- remote: buf.build/protocolbuffers/go:v1.31.0
+  out: .
+  opt:
+  - Mio/prometheus/write/v2/types.proto=io/prometheus/write/v2
+
+# vtproto for efficiency utilities like pooling etc.
+# https://buf.build/community/planetscale-vtprotobuf?version=v0.6.0
+- remote: buf.build/community/planetscale-vtprotobuf:v0.6.0
+  out: .
+  opt:
+  - Mio/prometheus/write/v2/types.proto=io/prometheus/write/v2
+  - features=marshal+unmarshal+size+clone
+
+inputs:
+- module: buf.build/prometheus/prometheus:7dec989b8d3a49e6bbe6d7221400e8f8 # (bwplotka-experiment1 label).
+  types:
+  - "io.prometheus.write.v2.Request"
