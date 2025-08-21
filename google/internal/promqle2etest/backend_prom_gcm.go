@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	gcm "cloud.google.com/go/monitoring/apiv3/v2"
@@ -27,30 +28,29 @@ import (
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"github.com/prometheus/compliance/promqle2e"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
 
-var _ promqle2e.Backend = PrometheusForkGCMBackend{}
-
-// PrometheusForkGCMBackend represents a Prometheus GMP fork scraping
-// metrics and pushing to GCM API for consumption.
-// This generally follows https://cloud.google.com/stackdriver/docs/managed-prometheus/setup-unmanaged.
-type PrometheusForkGCMBackend struct {
-	Image string
-	Name  string
-	GCMSA []byte
-}
-
-func (p PrometheusForkGCMBackend) Ref() string {
-	return p.Name
-}
+var (
+	_ promqle2e.Backend = PrometheusForkGCMBackend{}
+	_ promqle2e.Backend = PrometheusGCMBackend{}
+)
 
 // newPrometheus creates a new Prometheus runnable.
-func newPrometheus(env e2e.Environment, name string, image string, scrapeTargetAddress string, flagOverride func(dir string) map[string]string) *e2emon.Prometheus {
+func newPrometheus(
+		env e2e.Environment, name string, image string, scrapeTargetAddress string,
+		extraConfig func(dir string) string,
+		flagOverride func(dir string) map[string]string,
+) *e2emon.Prometheus {
 	ports := map[string]int{"http": 9090}
 
 	f := env.Runnable(name).WithPorts(ports).Future()
+
+	if extraConfig == nil {
+		extraConfig = func(dir string) string { return "" }
+	}
 	config := fmt.Sprintf(`
 global:
   external_labels:
@@ -64,7 +64,7 @@ scrape_configs:
   metric_relabel_configs:
   - regex: instance
     action: labeldrop
-`, name, scrapeTargetAddress)
+%s`, name, scrapeTargetAddress, extraConfig(f.Dir()))
 	if err := os.WriteFile(filepath.Join(f.Dir(), "prometheus.yml"), []byte(config), 0600); err != nil {
 		return &e2emon.Prometheus{Runnable: e2e.NewFailedRunnable(name, fmt.Errorf("create prometheus config failed: %w", err))}
 	}
@@ -94,22 +94,31 @@ scrape_configs:
 		Readiness: e2e.NewHTTPReadinessProbe("http", "/-/ready", 200, 200),
 		User:      strconv.Itoa(os.Getuid()),
 	}), "http")
-
 	return &e2emon.Prometheus{
 		Runnable:     p,
 		Instrumented: p,
 	}
 }
 
+// PrometheusForkGCMBackend represents a Prometheus GMP fork scraping
+// metrics and pushing to GCM API for consumption.
+// This generally follows https://cloud.google.com/stackdriver/docs/managed-prometheus/setup-unmanaged.
+type PrometheusForkGCMBackend struct {
+	Image string
+	Name  string
+	GCMSA []byte
+}
+
+func (p PrometheusForkGCMBackend) Ref() string {
+	return p.Name
+}
+
 func (p PrometheusForkGCMBackend) StartAndWaitReady(t testing.TB, env e2e.Environment) promqle2e.RunningBackend {
 	t.Helper()
 
 	ctx := t.Context()
-
 	creds, err := google.CredentialsFromJSON(ctx, p.GCMSA, gcm.DefaultAuthScopes()...)
-	if err != nil {
-		t.Fatalf("create credentials from JSON: %s", err)
-	}
+	require.NoError(t, err, "create credentials from JSON")
 
 	// Fake, does not matter.
 	cluster := "pe-github-action"
@@ -119,26 +128,106 @@ func (p PrometheusForkGCMBackend) StartAndWaitReady(t testing.TB, env e2e.Enviro
 		Address: fmt.Sprintf("https://monitoring.googleapis.com/v1/projects/%s/location/global/prometheus", creds.ProjectID),
 		Client:  oauth2.NewClient(ctx, creds.TokenSource),
 	})
-	if err != nil {
-		t.Fatalf("create Prometheus client: %s", err)
+	require.NoError(t, err, "create Prometheus client failed")
+
+	replayer := promqle2e.StartIngestByScrapeReplayer(t, env)
+	prom := newPrometheus(
+		env, p.Name, p.Image, replayer.Endpoint(env),
+		nil,
+		func(dir string) map[string]string {
+			// Flags as per https://cloud.google.com/stackdriver/docs/managed-prometheus/setup-unmanaged#gmp-binary.
+			return map[string]string{"--export.label.project-id": creds.ProjectID,
+				"--export.label.location":   location,
+				"--export.label.cluster":    cluster,
+				"--export.credentials-file": filepath.Join(dir, "gcm-sa.json"),
+			}
+		},
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(prom.Dir(), "gcm-sa.json"), p.GCMSA, 0600), "writing GCM JSON failed")
+	require.NoError(t, e2e.StartAndWaitReady(prom))
+
+	return promqle2e.NewRunningScrapeReplayBasedBackend(
+		replayer,
+		map[string]string{
+			"cluster":    cluster,
+			"location":   location,
+			"project_id": creds.ProjectID,
+			"collector":  p.Name,
+			"job":        "test",
+		},
+		v1.NewAPI(cl),
+	)
+}
+
+// PrometheusGCMBackend represents a vanilla Prometheus scraping
+// metrics and pushing to GCM PRW API for consumption.
+// This represents the "unforked" flow which is currently in development.
+type PrometheusGCMBackend struct {
+	Image string
+	Name  string
+	GCMSA []byte
+
+	// PRW2GCMProxyImage is a docker image containing prw2gcm binary from google/cmd/prw2gcm.
+	// GCM PRW 2.0 support is in progress. In the meantime, prw2gcm simple, stateless
+	// proxy can be injected for transparent GCM conversion (thanks to the new PRW 2.0 protocol
+	// this is now possible). This allows testing future OSS Prometheus compatibility with GCM PRW.
+	//
+	// If this option is set, this backend will start prw2gcm sidecar and tell Prometheus to use prw2gcm
+	// local HTTP endpoint as the Remote Write URL target instead of GCM. prw2gcm will then
+	// route to GCM. No other changes are done to Prometheus (e.g. we inject GCM auth on Prometheus side).
+	PRW2GCMProxyImage string
+}
+
+func (p PrometheusGCMBackend) Ref() string {
+	return p.Name
+}
+
+func (p PrometheusGCMBackend) StartAndWaitReady(t testing.TB, env e2e.Environment) promqle2e.RunningBackend {
+	t.Helper()
+
+	ctx := t.Context()
+	creds, err := google.CredentialsFromJSON(ctx, p.GCMSA, gcm.DefaultAuthScopes()...)
+	require.NoError(t, err, "create credentials from JSON")
+
+	// Fake, does not matter.
+	cluster := "pe-github-action"
+	location := "europe-west3-a"
+
+	gcmPromAPI := fmt.Sprintf("https://monitoring.googleapis.com/v1/projects/%s/location/global/prometheus", creds.ProjectID)
+	cl, err := api.NewClient(api.Config{
+		Address: gcmPromAPI,
+		Client:  oauth2.NewClient(ctx, creds.TokenSource),
+	})
+	require.NoError(t, err, "create Prometheus client failed")
+
+	remoteWriteURL := gcmPromAPI + "/api/v1/write"
+	// Inject prw2gcm proxy if requested.
+	if p.PRW2GCMProxyImage != "" {
+		prw2gcm := env.Runnable("prw2gcm").WithPorts(map[string]int{"http": 19091}).Init(e2e.StartOptions{
+			Command: e2e.NewCommandWithoutEntrypoint("prw2gcm", "--gcm.forward-credentials"),
+			Image:   p.PRW2GCMProxyImage,
+		})
+		require.NoError(t, e2e.StartAndWaitReady(prw2gcm))
+
+		// In this mode Prometheus talks to prw2gcm, but auth still is initiated on Prometheus.
+		remoteWriteURL = strings.Replace(remoteWriteURL, "https://monitoring.googleapis.com", prw2gcm.InternalEndpoint("http"), 1)
 	}
 
 	replayer := promqle2e.StartIngestByScrapeReplayer(t, env)
-	prom := newPrometheus(env, p.Name, p.Image, replayer.Endpoint(env), func(dir string) map[string]string {
-		if err := os.WriteFile(filepath.Join(dir, "gcm-sa.json"), p.GCMSA, 0600); err != nil {
-			t.Fatalf("write JSON creds: %s", err)
-		}
-
-		// Flags as per https://cloud.google.com/stackdriver/docs/managed-prometheus/setup-unmanaged#gmp-binary.
-		return map[string]string{"--export.label.project-id": creds.ProjectID,
-			"--export.label.location":   location,
-			"--export.label.cluster":    cluster,
-			"--export.credentials-file": filepath.Join(dir, "gcm-sa.json"),
-		}
-	})
-	if err := e2e.StartAndWaitReady(prom); err != nil {
-		t.Fatal(err)
-	}
+	prom := newPrometheus(
+		env, p.Name, p.Image, replayer.Endpoint(env),
+		func(dir string) string {
+			return fmt.Sprintf(`remote_write:
+- name: gcm
+  url: %s
+  google_iam:
+    credentials_file: %s
+`, remoteWriteURL, filepath.Join(dir, "gcm-sa.json"))
+		},
+		nil,
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(prom.Dir(), "gcm-sa.json"), p.GCMSA, 0600), "writing GCM JSON failed")
+	require.NoError(t, e2e.StartAndWaitReady(prom))
 
 	return promqle2e.NewRunningScrapeReplayBasedBackend(
 		replayer,
