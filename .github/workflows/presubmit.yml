@@ -33,11 +33,14 @@ jobs:
     name: Ensure Google image builds (amd64)
     timeout-minutes: 30
     runs-on: ubuntu-latest
+    container:
+      # Use the same image Louhi will use.
+      image: gcr.io/cloud-builders/docker
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+#    - name: Set up Docker Buildx
+#      uses: docker/setup-buildx-action@v3
     - name: Add vendoring
       run: |
         # Our dockerfile expects npm vendoring, yet this is done during the mirror stage.
@@ -47,7 +50,6 @@ jobs:
     - name: Ensure forked image is buildable
       run: |
         # The same commands we use for building internally.
-        ls -l web/ui/node_modules/@lezer
         docker run --rm --privileged multiarch/qemu-user-static --reset --credential yes --persistent yes
         docker buildx create --name multi-arch-builder --use
         DOCKER_BUILDKIT=1 docker buildx build -t gmp-prometheus:amd64 . -f ./Dockerfile.google --platform linux/amd64 --target=app --load
