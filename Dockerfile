@@ -1,8 +1,8 @@
 ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs
-ARG IMAGE_BUILD_GO=docker.io/library/golang:1.23.4-bookworm@sha256:ef30001eeadd12890c7737c26f3be5b3a8479ccdcdc553b999c84879875a27ce
+ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.5@sha256:579ae701e259b1bb4200e2f5713751c62401220277df267c6914e06df12f1a9b
 
-ARG IMAGE_BASE_DEBUG=gcr.io/distroless/static-debian12:debug
-ARG IMAGE_BASE=gcr.io/distroless/static-debian12:nonroot
+ARG IMAGE_BASE_DEBUG=gcr.io/distroless/base-nossl-debian12:debug
+ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc:gke_distroless_20250807.00_p0
 
 FROM ${IMAGE_BUILD_GO} AS gobase
 
@@ -24,10 +24,18 @@ RUN make npm_licenses
 FROM gobase as buildbase
 WORKDIR /app
 COPY --from=assets /app ./
-ENV GOEXPERIMENT=noboringcrypto
-ENV CGO_ENABLED=0
-ENV GOFIPS140=latest
-RUN go build \
+ENV GOEXPERIMENT=boringcrypto
+ENV CGO_ENABLED=1
+ENV GOFIPS140=off
+ENV GOTOOLCHAIN=local
+ENV GOARCH=${TARGETARCH}
+ENV GOOS=${TARGETOS}
+RUN if [ "${TARGETARCH}" = "arm64" ] && [ "${BUILDARCH}" != "arm64" ]; then \
+      apt install -y --no-install-recommends \
+        gcc-aarch64-linux-gnu libc6-dev-arm64-cross; \
+      CC=aarch64-linux-gnu-gcc; \
+    fi && \ 
+    go build \
     -tags builtinassets -mod=vendor \
     -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
     -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
