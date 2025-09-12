@@ -47,9 +47,10 @@ type seriesCache struct {
 	now    func() time.Time
 	pool   *pool
 
-	// Guards access to the entries and intervals maps and the lastRefresh
+	// Guards access to the entries, matchers, intervals maps and the lastRefresh
 	// field of individual cache entries.
 	mtx sync.Mutex
+
 	// Map from series reference to various cached information about it.
 	entries map[storage.SeriesRef]*seriesCacheEntry
 
@@ -117,9 +118,6 @@ func (e *seriesCacheEntry) valid() bool {
 
 // shouldRefresh returns true if the cached state should be refreshed.
 func (e *seriesCacheEntry) shouldRefresh() bool {
-	// Matchers cannot be changed at runtime and are applied to the local time series labels
-	// without external labels. Thus the dropped status can never change at runtime and thus
-	// no refresh is required.
 	return !e.dropped && time.Now().Unix() > e.nextRefresh
 }
 
@@ -132,12 +130,7 @@ func (e *seriesCacheEntry) setNextRefresh() {
 	e.nextRefresh = time.Now().Add(refreshInterval).Add(jitter).Unix()
 }
 
-func newSeriesCache(
-	logger log.Logger,
-	reg prometheus.Registerer,
-	metricTypePrefix string,
-	matchers Matchers,
-) *seriesCache {
+func newSeriesCache(logger log.Logger, reg prometheus.Registerer, metricTypePrefix string) *seriesCache {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
@@ -146,7 +139,6 @@ func newSeriesCache(
 		now:              time.Now,
 		pool:             newPool(reg),
 		entries:          map[storage.SeriesRef]*seriesCacheEntry{},
-		matchers:         matchers,
 		metricTypePrefix: metricTypePrefix,
 	}
 }
@@ -165,6 +157,36 @@ func (c *seriesCache) run(ctx context.Context) {
 				//nolint:errcheck
 				level.Error(c.logger).Log("msg", "garbage collection failed", "err", err)
 			}
+		}
+	}
+}
+
+// setMatchers changes internal series cache matcher.
+func (c *seriesCache) setMatchers(matchers Matchers) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	c.matchers = matchers
+
+	// Go through all entries and update their dropped status.
+	for _, e := range c.entries {
+		dropped := !c.matchers.Matches(e.lset)
+		if !dropped && e.dropped {
+			// Series was dropped before and is now matching.
+			e.dropped = false
+			e.nextRefresh = 0 // Force refresh to re-populate it.
+			continue
+		}
+		if dropped && !e.dropped {
+			// Series was matching before and is now dropped.
+			e.dropped = true
+			// Release resources.
+			// This is best-effort -- only needed for efficiency, not correctness.
+			c.pool.release(e.protos.gauge.proto)
+			c.pool.release(e.protos.cumulative.proto)
+			e.protos = cachedProtos{}
+			e.metadata = MetricMetadata{}
+			continue
 		}
 	}
 }
@@ -240,6 +262,7 @@ func (c *seriesCache) get(s record.RefSample, externalLabels labels.Labels, meta
 		e = &seriesCacheEntry{}
 		c.entries[ref] = e
 	}
+
 	if e.shouldRefresh() {
 		if err := c.populate(ref, e, externalLabels, metadata); err != nil {
 			//nolint:errcheck
@@ -338,6 +361,7 @@ const (
 const maxLabelCount = 100
 
 // populate cached state for the given entry.
+// Callers are expected to c.mtx.Lock before using this method.
 func (c *seriesCache) populate(ref storage.SeriesRef, entry *seriesCacheEntry, externalLabels labels.Labels, getMetadata MetadataFunc) error {
 	if entry.lset.IsEmpty() {
 		entry.lset = c.getLabelsByRef(ref)

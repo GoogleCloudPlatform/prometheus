@@ -1544,11 +1544,12 @@ func TestSampleBuilder(t *testing.T) {
 
 	for i, c := range cases {
 		t.Run(fmt.Sprintf("%d: %s", i, c.doc), func(t *testing.T) {
-			cache := newSeriesCache(nil, nil, MetricTypePrefix, c.matchers)
+			cache := newSeriesCache(nil, nil, MetricTypePrefix)
 			// Fake lookup into TSDB.
 			cache.getLabelsByRef = func(ref storage.SeriesRef) labels.Labels {
 				return c.series[ref]
 			}
+			cache.setMatchers(c.matchers)
 
 			// Process entire input sample batch.
 			var result []*monitoring_pb.TimeSeries

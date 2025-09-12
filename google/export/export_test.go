@@ -16,15 +16,18 @@ package export
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	monitoring_pb "cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	"github.com/go-kit/log"
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/go-cmp/cmp"
 	gax "github.com/googleapis/gax-go/v2"
 	"github.com/prometheus/common/model"
@@ -33,6 +36,7 @@ import (
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/record"
+	"github.com/stretchr/testify/require"
 	monitoredres_pb "google.golang.org/genproto/googleapis/api/monitoredres"
 	timestamp_pb "google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -311,6 +315,7 @@ func TestExporter_wrapMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	require.NoError(t, e.ApplyConfig(&config.Config{}))
 
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
@@ -363,6 +368,24 @@ func TestExporter_drainBacklog(t *testing.T) {
 		return labels.FromStrings("project_id", "test", "location", "test")
 	})
 
+	{
+		// Export now requires at least one ApplyConfig call, otherwise it's noop, test it.
+		for i := range 100 {
+			// Noop.
+			e.Export(nil, []record.RefSample{
+				{Ref: 1, T: int64(i), V: float64(i)},
+			}, nil)
+		}
+
+		metricServer.Lock()
+		got := len(metricServer.samples)
+		metricServer.Unlock()
+		if got != 0 {
+			t.Fatalf("got %d, want zero, because ApplyConfig was not called", got)
+		}
+	}
+	require.NoError(t, e.ApplyConfig(&config.Config{}))
+
 	// Fill a single shard with samples.
 	wantSamples := 50
 	for i := range wantSamples {
@@ -403,77 +426,33 @@ func TestApplyConfig(t *testing.T) {
 	defer cancel()
 
 	exporterOpts := ExporterOpts{
-		DisableAuth: true,
+		DisableAuth: true, // Don't error on lack of default creds for metric client on New.
+		ProjectID:   "project_abc",
+		Matchers: func() (ret Matchers) {
+			// Initial matchers, imitating flag setting (or EXTRA ARGS).
+			require.NoError(t, ret.Set(`{ref=~"(1|2)"}`))
+			return ret
+		}(),
 	}
 	exporterOpts.DefaultUnsetFields()
+
 	e, err := New(ctx, log.NewJSONLogger(log.NewSyncWriter(os.Stderr)), nil, exporterOpts, NopLease())
 	if err != nil {
-		t.Fatalf("Create exporter: %s", err)
+		t.Fatalf("create exporter: %s", err)
 	}
-	e.SetLabelsByIDFunc(func(storage.SeriesRef) labels.Labels {
-		return labels.FromStrings("location", "us-central1-c")
+
+	// Each case will export 3 samples with ref=<ref> label and one external label overridden.
+	e.SetLabelsByIDFunc(func(ref storage.SeriesRef) labels.Labels {
+		return labels.FromStrings("location", "us-central1-c", "ref", fmt.Sprint(ref))
 	})
+	exportSamplesFn := func() {
+		e.Export(nil, []record.RefSample{{Ref: 1, T: int64(0), V: float64(0)}}, nil)
+		e.Export(nil, []record.RefSample{{Ref: 2, T: int64(0), V: float64(0)}}, nil)
+		e.Export(nil, []record.RefSample{{Ref: 3, T: int64(0), V: float64(0)}}, nil)
+	}
 
 	metricServer := testMetricService{}
-	e.newMetricClient = func(_ context.Context, opts ExporterOpts) (metricServiceClient, error) {
-		t.Helper()
-		if opts.Compression != "gzip" {
-			// This tests if ApplConfig will update new ExporterOpts
-			t.Fatalf("expected gzip compression to be test")
-		}
-		return &metricServer, nil
-	}
-	// Sends a sample with no labels. The project label is automatically added by the
-	// exporter.
-	sendSample := func() {
-		e.Export(nil, []record.RefSample{{Ref: 1, T: int64(0), V: float64(0)}}, nil)
-	}
-	// Tests all samples have the correct project ID label value.
-	testSamples := func(expectedProjectID string, expectedSampleCount int) {
-		t.Helper()
-
-		var err error
-		pollErr := wait.PollUntilContextCancel(ctx, batchDelayMax, false, func(_ context.Context) (bool, error) {
-			metricServer.Lock()
-			defer metricServer.Unlock()
-			switch len(metricServer.samples) {
-			case 0:
-				err = errors.New("no samples sent")
-				return false, nil
-			case expectedSampleCount:
-				// Good.
-			default:
-				// Sometimes there's a small delay from the thread that sends the new
-				// samples, so let's wait.
-				err = fmt.Errorf("expected %d samples but got %d", expectedSampleCount, len(metricServer.samples))
-				return false, nil
-			}
-
-			for _, sample := range metricServer.samples {
-				projectID := sample.Resource.Labels[KeyProjectID]
-				if projectID != expectedProjectID {
-					err = fmt.Errorf("expected project ID %q but got %q", expectedProjectID, projectID)
-					return false, nil
-				}
-			}
-
-			return true, nil
-		})
-		if pollErr != nil {
-			if wait.Interrupted(pollErr) && err != nil {
-				pollErr = err
-			}
-			t.Fatalf("did not get samples: %s", pollErr)
-		}
-	}
-	sendAndTestSamples := func(expectedProjectID string) {
-		// Send two samples to ensure both have correct labels.
-		sendSample()
-		sendSample()
-		sendSample()
-		testSamples(expectedProjectID, 3)
-		metricServer.clear()
-	}
+	e.metricClient = &metricServer
 
 	// In our Prometheus fork, GCM is executed before the reloader in the run group.
 	go func() {
@@ -482,54 +461,301 @@ func TestApplyConfig(t *testing.T) {
 		}
 	}()
 
-	// Initial apply with compression to trigger client reload,
-	// important to actually leverage e.newMetricClient.
-	if err := e.ApplyConfig(&config.Config{
-		GlobalConfig: config.GlobalConfig{
-			ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
-		},
-		GoogleCloud: gcmconfig.GoogleCloudConfig{
-			Export: gcmconfig.GoogleCloudExportConfig{
-				Compression: "gzip",
-			},
-		},
-	}); err != nil {
-		t.Fatalf("Initial apply: %s", err)
+	type gcmSampleLabels struct {
+		resource []string
+		metric   []string
 	}
-	sendAndTestSamples("project-test")
 
-	// Changing project labels should work.
-	if err := e.ApplyConfig(&config.Config{
-		GlobalConfig: config.GlobalConfig{
-			ExternalLabels: labels.FromStrings(KeyProjectID, "project-abc"),
-		},
-		GoogleCloud: gcmconfig.GoogleCloudConfig{
-			Export: gcmconfig.GoogleCloudExportConfig{
-				Compression: "gzip",
-			},
-		},
-	}); err != nil {
-		t.Fatalf("Initial apply: %s", err)
+	resourceWithProject := func(projectID string) []string {
+		return []string{"cluster", "", "instance", "", "job", "", "location", "us-central1-c", "namespace", "", "project_id", projectID}
 	}
-	sendAndTestSamples("project-abc")
 
-	// Force new client to fail and ApplyConfig that should NOT create new client.
-	e.newMetricClient = func(_ context.Context, opts ExporterOpts) (metricServiceClient, error) {
-		return nil, errors.New("client should be NOT recreated")
-	}
-	if err := e.ApplyConfig(&config.Config{
-		GlobalConfig: config.GlobalConfig{
-			ExternalLabels: labels.FromStrings(KeyProjectID, "project-xyz"),
-		},
-		GoogleCloud: gcmconfig.GoogleCloudConfig{
-			Export: gcmconfig.GoogleCloudExportConfig{
-				Compression: "gzip",
+	// NOTE: All test cases share the same exporter to ensure subsequent ApplyConfigs are
+	// updating options correctly.
+	for _, tcase := range []struct {
+		name string
+
+		toApply                       *config.Config
+		expectedSamplesSeries         []gcmSampleLabels // expected samples on GCM side.
+		expectClientReload            bool
+		expectedCacheEntriesRefreshed []storage.SeriesRef
+	}{
+		{
+			name:    "no change",
+			toApply: &config.Config{},
+			expectedSamplesSeries: []gcmSampleLabels{
+				// No 3 ref due to initial matchers.
+				{metric: []string{"ref", "1"}, resource: resourceWithProject("project_abc")},
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project_abc")},
 			},
 		},
-	}); err != nil {
-		t.Fatalf("Initial apply: %s", err)
+		{
+			name: "compression change should trigger client recreation",
+			toApply: &config.Config{
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+					},
+				},
+			},
+			expectClientReload: true,
+			expectedSamplesSeries: []gcmSampleLabels{
+				{metric: []string{"ref", "1"}, resource: resourceWithProject("project_abc")},
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project_abc")},
+			},
+		},
+		{
+			name: "ExternalLabels change should trigger cache refresh",
+			toApply: &config.Config{
+				GlobalConfig: config.GlobalConfig{
+					ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+				},
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+					},
+				},
+			},
+			expectedCacheEntriesRefreshed: []storage.SeriesRef{1, 2},
+			expectedSamplesSeries: []gcmSampleLabels{
+				{metric: []string{"ref", "1"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project-test")},
+			},
+		},
+		{
+			name: "Noop filtering change (without enable flag)",
+			toApply: &config.Config{
+				GlobalConfig: config.GlobalConfig{
+					ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+				},
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+						Match:       []string{`{ref=~"(0|3)"}`, `{ref="2"}`}, // Skip 1.
+					},
+				},
+			},
+			expectedSamplesSeries: []gcmSampleLabels{
+				{metric: []string{"ref", "1"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project-test")},
+			},
+		},
+		{
+			name: "Filtering change",
+			toApply: &config.Config{
+				GlobalConfig: config.GlobalConfig{
+					ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+				},
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+						EnableMatch: proto.Bool(true),
+						Match:       []string{`{ref=~"(0|3)"}`, `{ref="2"}`}, // Skip 1.
+					},
+				},
+			},
+			expectedCacheEntriesRefreshed: []storage.SeriesRef{3}, // Expect refresh for series that're now matching.
+			expectedSamplesSeries: []gcmSampleLabels{
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "3"}, resource: resourceWithProject("project-test")},
+			},
+		},
+		{
+			name: "No change, same config",
+			toApply: &config.Config{
+				GlobalConfig: config.GlobalConfig{
+					ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+				},
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+						EnableMatch: proto.Bool(true),
+						Match:       []string{`{ref=~"(0|3)"}`, `{ref="2"}`}, // Skip 1.
+					},
+				},
+			},
+			expectedSamplesSeries: []gcmSampleLabels{
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "3"}, resource: resourceWithProject("project-test")},
+			},
+		},
+		{
+			name: "Filtering change (noop again)",
+			toApply: &config.Config{
+				GlobalConfig: config.GlobalConfig{
+					ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+				},
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+						// EnableMatch is now nil.
+					},
+				},
+			},
+			expectedCacheEntriesRefreshed: []storage.SeriesRef{1}, // Expect refresh for series that're now matching.
+			expectedSamplesSeries: []gcmSampleLabels{
+				// Noop means we go back to initial state of filtering.
+				{metric: []string{"ref", "1"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project-test")},
+			},
+		},
+		{
+			name: "Filtering reset",
+			toApply: &config.Config{
+				GlobalConfig: config.GlobalConfig{
+					ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+				},
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+						EnableMatch: proto.Bool(false), // Explicit false means match all.
+					},
+				},
+			},
+			expectedCacheEntriesRefreshed: []storage.SeriesRef{3}, // Expect refresh for series that're now matching.
+			expectedSamplesSeries: []gcmSampleLabels{
+				{metric: []string{"ref", "1"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "3"}, resource: resourceWithProject("project-test")},
+			},
+		},
+		{
+			name: "Filtering change (back)",
+			toApply: &config.Config{
+				GlobalConfig: config.GlobalConfig{
+					ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+				},
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+						EnableMatch: proto.Bool(true),
+						Match:       []string{`{ref=~"(0|3)"}`, `{ref="2"}`}, // Skip 1.
+					},
+				},
+			},
+			expectedSamplesSeries: []gcmSampleLabels{
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "3"}, resource: resourceWithProject("project-test")},
+			},
+		},
+		{
+			name: "Filtering change (drop all)",
+			toApply: &config.Config{
+				GlobalConfig: config.GlobalConfig{
+					ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+				},
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+						EnableMatch: proto.Bool(true),
+						Match:       []string{`{ref="1", ref="2"}`}, // Impossible match; drop all!
+					},
+				},
+			},
+			expectedSamplesSeries: []gcmSampleLabels{},
+		},
+		{
+			name: "Filtering change (force empty)",
+			toApply: &config.Config{
+				GlobalConfig: config.GlobalConfig{
+					ExternalLabels: labels.FromStrings(KeyProjectID, "project-test"),
+				},
+				GoogleCloud: gcmconfig.GoogleCloudConfig{
+					Export: gcmconfig.GoogleCloudExportConfig{
+						Compression: "gzip",
+						EnableMatch: proto.Bool(true),
+					},
+				},
+			},
+			expectedCacheEntriesRefreshed: []storage.SeriesRef{1, 2, 3}, // Expect refresh for series that're now matching.
+			expectedSamplesSeries: []gcmSampleLabels{
+				{metric: []string{"ref", "1"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "2"}, resource: resourceWithProject("project-test")},
+				{metric: []string{"ref", "3"}, resource: resourceWithProject("project-test")},
+			},
+		},
+	} {
+		t.Run(tcase.name, func(t *testing.T) {
+			defer metricServer.clear()
+
+			if tcase.expectClientReload {
+				e.newMetricClient = func(_ context.Context, opts ExporterOpts) (metricServiceClient, error) {
+					t.Helper()
+					require.Equal(t, tcase.toApply.GoogleCloud.Export.Compression, opts.Compression)
+					return &metricServer, nil
+				}
+			} else {
+				e.newMetricClient = func(_ context.Context, opts ExporterOpts) (metricServiceClient, error) {
+					t.Helper()
+					t.Fatal("unexpected newMetricClient call, client should not be recreated")
+					return nil, nil
+				}
+			}
+
+			require.NoError(t, e.ApplyConfig(tcase.toApply))
+			// Verify if cache was reset, if expected.
+			// Run in closure for lock defer to work on require failures.
+			func() {
+				e.seriesCache.mtx.Lock()
+				defer e.seriesCache.mtx.Unlock()
+				for i, entry := range e.seriesCache.entries {
+					if slices.Contains(tcase.expectedCacheEntriesRefreshed, i) {
+						require.Zero(t, entry.nextRefresh, entry.lset)
+						continue
+					}
+					if entry.dropped {
+						// Dropped series is N/A.
+						continue
+					}
+					require.NotZero(t, entry.nextRefresh, entry.lset)
+				}
+			}()
+
+			// Export 3 samples (ref=1, ref=2, ref=3)
+			exportSamplesFn()
+
+			// TODO: This test is not very reliable for detecting if we send more samples than tcase.expectedSamplesSeries, find way to ensure this.
+			// For now we wait a bit (0.5s)
+			time.Sleep(10 * batchDelayMax)
+
+			var err error
+			pollErr := wait.PollUntilContextCancel(ctx, batchDelayMax, false, func(_ context.Context) (bool, error) {
+				t.Helper()
+
+				metricServer.Lock()
+				defer metricServer.Unlock()
+				switch len(metricServer.samples) {
+				case len(tcase.expectedSamplesSeries):
+					// Good.
+				default:
+					// Sometimes there's a small delay from the thread that sends the new
+					// samples, so let's wait.
+					err = fmt.Errorf("expected %d samples but got %d", len(tcase.expectedSamplesSeries), len(metricServer.samples))
+					return false, nil
+				}
+
+				// samples might have been seen out of order (series-wise). Sort it for easier testing.
+				sort.Slice(metricServer.samples, func(i, j int) bool {
+					return strings.Compare(metricServer.samples[i].Metric.String(), metricServer.samples[j].Metric.String()) < 0
+				})
+				for i, sample := range metricServer.samples {
+					require.Equal(t, labels.FromStrings(tcase.expectedSamplesSeries[i].resource...).Map(), sample.Resource.Labels)
+					require.Equal(t, labels.FromStrings(tcase.expectedSamplesSeries[i].metric...).Map(), sample.Metric.Labels)
+				}
+				return true, nil
+			})
+			if pollErr != nil {
+				if wait.Interrupted(pollErr) && err != nil {
+					pollErr = err
+				}
+				t.Fatalf("did not get samples: %s", pollErr)
+			}
+		})
 	}
-	sendAndTestSamples("project-xyz")
+
+	// Extra check if series cache clear works fine after our dynamic matchers resource releases
+	e.seriesCache.clear()
+
 }
 
 func TestDisabledExporter(t *testing.T) {
@@ -566,4 +792,55 @@ func TestDisabledExporter(t *testing.T) {
 
 	// Allow samples to be sent to the void. If we don't panic, we're good.
 	time.Sleep(batchDelayMax)
+}
+
+func TestMatchers_Equals(t *testing.T) {
+	var m Matchers
+	require.NoError(t, m.Set(`{name="foo"}`))
+	require.NoError(t, m.Set(`{name=~"foo.1"}`))
+	require.NoError(t, m.Set(`{name="foo",bar="x"}`))
+
+	var same Matchers
+	require.NoError(t, same.Set(`{name="foo"}`))
+	require.NoError(t, same.Set(`{name=~"foo.1"}`))
+	require.NoError(t, same.Set(`{name="foo",    bar="x"}`))
+
+	require.True(t, m.Equals(same))
+	require.True(t, same.Equals(m))
+
+	var diff1 Matchers
+	require.False(t, m.Equals(diff1))
+	require.False(t, diff1.Equals(m))
+
+	var diff2 Matchers
+	require.NoError(t, diff2.Set(`{name="foo"}`))
+	require.False(t, m.Equals(diff2))
+	require.False(t, diff2.Equals(m))
+
+	var diff3 Matchers
+	require.NoError(t, diff3.Set(`{name="foo"}`))
+	require.NoError(t, diff3.Set(`{name=~"foo.1"}`))
+	require.False(t, m.Equals(diff3))
+	require.False(t, diff3.Equals(m))
+
+	var diff4 Matchers
+	require.NoError(t, diff4.Set(`{name="foo"}`))
+	require.NoError(t, diff4.Set(`{name="foo",bar="x"}`))
+	require.NoError(t, diff4.Set(`{name=~"foo.1"}`))
+	require.False(t, m.Equals(diff4))
+	require.False(t, diff4.Equals(m))
+
+	var diff5 Matchers
+	require.NoError(t, diff5.Set(`{name="foo1"}`))
+	require.NoError(t, diff5.Set(`{name=~"foo.1"}`))
+	require.NoError(t, diff5.Set(`{name="foo",bar="x"}`))
+	require.False(t, m.Equals(diff5))
+	require.False(t, diff5.Equals(m))
+
+	var diff6 Matchers
+	require.NoError(t, diff6.Set(`{name="foo"}`))
+	require.NoError(t, diff6.Set(`{name=~"foo.1"}`))
+	require.NoError(t, diff6.Set(`{bar="x",name="foo"}`))
+	require.False(t, m.Equals(diff6))
+	require.False(t, diff6.Equals(m))
 }

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -149,6 +150,13 @@ type Exporter struct {
 	// Used to construct a new metric client when options change, or at initialization. It
 	// is exposed as a variable so that unit tests may change the constructor.
 	newMetricClient func(ctx context.Context, opts ExporterOpts) (metricServiceClient, error)
+
+	// Currently applied matchers in seriesCache.matchers. Avoids locking for reads.
+	matchers Matchers
+
+	// We allow runtime config path. For startup consistency make exporter noop until export
+	// will see the first ApplyConfig.
+	configured bool
 }
 
 const (
@@ -206,7 +214,8 @@ type ExporterOpts struct {
 	// A list of metric matchers. Only Prometheus time series satisfying at
 	// least one of the matchers are exported.
 	// This option matches the semantics of the Prometheus federation match[]
-	// parameter.
+	// parameter. This is a setting from flags only, see ApplyConfig on
+	// how it's applied dynamically in conjunction with Export.Match runtime option.
 	Matchers Matchers
 
 	// Prefix under which metrics are written to GCM.
@@ -367,6 +376,7 @@ func defaultNewMetricClient(ctx context.Context, opts ExporterOpts) (metricServi
 }
 
 // New returns a new Cloud Monitoring Exporter.
+// IMPORTANT: Created exporter is noop until ApplyConfig is called at least once. This is for configuration startup consistency.
 func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts ExporterOpts, lease Lease) (*Exporter, error) {
 	grpc_prometheus.EnableClientHandlingTimeHistogram(
 		grpc_prometheus.WithHistogramBuckets([]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 20, 30, 40, 50, 60}),
@@ -409,7 +419,7 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 		ctx:                  ctx,
 		opts:                 opts,
 		metricClient:         metricClient,
-		seriesCache:          newSeriesCache(logger, reg, opts.MetricTypePrefix, opts.Matchers),
+		seriesCache:          newSeriesCache(logger, reg, opts.MetricTypePrefix),
 		externalLabels:       createLabelSet(&config.Config{}, &opts),
 		newMetricClient:      defaultNewMetricClient,
 		nextc:                make(chan struct{}, 1),
@@ -418,6 +428,10 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 		lease:                lease,
 	}
 
+	// Set initial matchers.
+	e.matchers = opts.Matchers
+	e.seriesCache.setMatchers(e.matchers)
+
 	// Whenever the lease is lost, clear the series cache so we don't start off of out-of-range
 	// reset timestamps when we gain the lease again.
 	lease.OnLeaderChange(e.seriesCache.clear)
@@ -425,7 +439,6 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 	for i := range e.shards {
 		e.shards[i] = newShard(opts.Efficiency.ShardBufferSize)
 	}
-
 	return e, nil
 }
 
@@ -442,10 +455,12 @@ const (
 // ApplyConfig updates the exporter state to the given configuration. For the
 // Prometheus fork config's google_cloud entry, ExporterOpts might be
 // changed and applied to the exporter, potentially recreating the metric client.
+// NOTE: Runtime configuration will not override disable/disableAuth options from flags.
 func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
 	// Note: We don't expect the NopExporter to call this. Only the config reloader calls it.
 	e.mtx.Lock()
 	defer e.mtx.Unlock()
+	e.configured = true
 
 	// Don't recreate the metric client each time. If the metric client is recreated, it has to
 	// potentially redo the TCP handshake. With HTTP/2, TCP connections are kept alive for a small
@@ -463,7 +478,6 @@ func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
 		e.opts.CredentialsFile = cfg.GoogleCloud.Export.CredentialsFile
 		recreateClient = true
 	}
-	// NOTE(bwplotka): Matchers are deprecated, see https://github.com/GoogleCloudPlatform/prometheus-engine/pull/1688
 
 	lset := createLabelSet(cfg, &e.opts)
 	labelsChanged := !labels.Equal(e.externalLabels, lset)
@@ -477,20 +491,41 @@ func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
 		}
 	}
 
-	// If changed, or we're calling this for the first time, we need to recreate the client.
+	var toApply Matchers
+	switch {
+	case cfg.GoogleCloud.Export.EnableMatch == nil:
+		// Ignore Export.Match, whatever was in flag or default wins.
+		toApply = e.opts.Matchers
+	case !*cfg.GoogleCloud.Export.EnableMatch:
+		// Explicit apply all matching (disabling the filtering).
+		toApply = nil
+	case *cfg.GoogleCloud.Export.EnableMatch:
+		// Runtime Export.Match opted-in; override:
+		for _, match := range cfg.GoogleCloud.Export.Match {
+			if err := toApply.Set(match); err != nil {
+				return err
+			}
+		}
+	}
+
 	if recreateClient {
+		// If changed, or we're calling this for the first time, we need to recreate the client.
 		e.metricClient, err = e.newMetricClient(e.ctx, e.opts)
 		if err != nil {
 			return fmt.Errorf("create metric client: %w", err)
 		}
 	}
 
+	// Updates series cache settings; those require extra care on cache entries.
+	if !e.matchers.Equals(toApply) {
+		e.matchers = toApply
+		e.seriesCache.setMatchers(e.matchers)
+	}
 	if labelsChanged {
 		e.externalLabels = lset
 		// New external labels possibly invalidate the cached series conversions.
 		e.seriesCache.forceRefresh()
 	}
-
 	return nil
 }
 
@@ -557,12 +592,17 @@ func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample, exemp
 		return
 	}
 
-	metadata = e.wrapMetadata(metadata)
-
 	e.mtx.Lock()
+	if !e.configured {
+		// ApplyConfig must be called at least once, otherwise we risk a race between flag and runtime config change on start.
+		e.mtx.Unlock()
+		return
+	}
 	externalLabels := e.externalLabels
 	start, end, ok := e.lease.Range()
 	e.mtx.Unlock()
+
+	metadata = e.wrapMetadata(metadata)
 
 	if !ok {
 		exemplarsDropped.WithLabelValues("not-in-ha-range").Add(float64(len(exemplarMap)))
@@ -1028,6 +1068,21 @@ func (m *Matchers) Set(s string) error {
 
 func (m *Matchers) IsCumulative() bool {
 	return true
+}
+
+// Equals returns true if m is the same as other matchers. Order matters.
+//
+// NOTE: In practice order semi-matter, as the match result should be similar, but
+// things are faster or slower depending on the order. For efficiency of this function
+// and deterministic efficiency of matching, we assume order matter.
+func (m *Matchers) Equals(other Matchers) bool {
+	return slices.EqualFunc(*m, other, func(msel, osel labels.Selector) bool {
+		return slices.EqualFunc(msel, osel, func(matcher, otherMatcher *labels.Matcher) bool {
+			return matcher.Type == otherMatcher.Type &&
+					matcher.Name == otherMatcher.Name &&
+					matcher.Value == otherMatcher.Value
+		})
+	})
 }
 
 func (m *Matchers) Matches(lset labels.Labels) bool {

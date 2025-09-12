@@ -154,7 +154,7 @@ func TestExtractResource(t *testing.T) {
 }
 
 func TestSeriesCache_garbageCollect(t *testing.T) {
-	cache := newSeriesCache(nil, nil, MetricTypePrefix, nil)
+	cache := newSeriesCache(nil, nil, MetricTypePrefix)
 	// Always return empty labels. This will cause cache entries to be added but not populated,
 	// which we don't need to test garbage collection.
 	cache.getLabelsByRef = func(storage.SeriesRef) labels.Labels { return labels.EmptyLabels() }
@@ -177,5 +177,64 @@ func TestSeriesCache_garbageCollect(t *testing.T) {
 	}
 	if _, ok := cache.entries[1]; !ok {
 		t.Errorf("Expected cache entry for series 1 but cache is %v", cache.entries)
+	}
+}
+
+func TestSeriesCache_setMatchers(t *testing.T) {
+	cache := newSeriesCache(nil, nil, MetricTypePrefix)
+	cache.getLabelsByRef = func(i storage.SeriesRef) labels.Labels {
+		switch i {
+		case storage.SeriesRef(1):
+			return labels.FromStrings("ref", "1")
+		case storage.SeriesRef(2):
+			return labels.FromStrings("ref", "2")
+		}
+		t.Fatal("expected either 1 or 2 ref, got", i)
+		return nil
+	}
+
+	// Fake now second timestamp.
+	now := int64(100000)
+	cache.now = func() time.Time { return time.Unix(now, 0) }
+
+	for _, tcase := range []struct {
+		matchers                           Matchers
+		expected1Dropped, expected2Dropped bool
+	}{
+		{
+			expected1Dropped: false,
+			expected2Dropped: false,
+		},
+		{
+			matchers:         Matchers{{labels.MustNewMatcher(labels.MatchEqual, "ref", "2")}},
+			expected1Dropped: true,
+			expected2Dropped: false,
+		},
+		{
+			matchers:         Matchers{{labels.MustNewMatcher(labels.MatchEqual, "ref", "1")}},
+			expected1Dropped: false,
+			expected2Dropped: true,
+		},
+		{
+			expected1Dropped: false,
+			expected2Dropped: false,
+		},
+	} {
+		t.Run("", func(t *testing.T) {
+			cache.setMatchers(tcase.matchers)
+
+			e1, _ := cache.get(record.RefSample{Ref: 1, T: (now - 100) * 1000}, labels.EmptyLabels(), nil)
+			e2, _ := cache.get(record.RefSample{Ref: 2, T: (now - 101) * 1000}, labels.EmptyLabels(), nil)
+			if len(cache.entries) != 2 {
+				t.Fatalf("Expected exactly 2 cache entries, but cache is %v", cache.entries)
+			}
+
+			if got, want := e1.dropped, tcase.expected1Dropped; got != want {
+				t.Errorf("Expected cache entry for series 1 dropped: %v, but cache is %v", tcase.expected1Dropped, e1)
+			}
+			if got, want := e2.dropped, tcase.expected2Dropped; got != want {
+				t.Errorf("Expected cache entry for series 2 dropped: %v, but cache is %v", tcase.expected2Dropped, e2)
+			}
+		})
 	}
 }
