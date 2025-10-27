@@ -7,7 +7,7 @@
 ARG IMAGE_BUILD_NODEJS=us-central1-docker.pkg.dev/serverless-runtimes/google-22/runtimes/nodejs22:latest@sha256:9e88442205b4c956ca4996c2be626db6ef412043182cdd620e741d0d5e14b6a6
 ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.9@sha256:17706709dd6f55af1efb33509fea7f09f54163a1209871224bed4cf297fb6bbb
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/base-nossl-debian12:debug
-ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc:gke_distroless_20250807.00_p0
+ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc:gke_distroless_20251007.00_p0
 
 FROM ${IMAGE_BUILD_GO} AS gobase
 WORKDIR /workspace
