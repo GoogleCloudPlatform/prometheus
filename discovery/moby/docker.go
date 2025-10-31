@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/go-kit/log"
@@ -178,7 +178,7 @@ func (d *DockerDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, er
 		Source: "Docker",
 	}
 
-	containers, err := d.client.ContainerList(ctx, types.ContainerListOptions{Filters: d.filters})
+	containers, err := d.client.ContainerList(ctx, container.ListOptions{Filters: d.filters})
 	if err != nil {
 		return nil, fmt.Errorf("error while listing containers: %w", err)
 	}
