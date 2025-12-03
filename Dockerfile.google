@@ -5,7 +5,7 @@
 # For the lack of the other official Google nodejs image, we use serverless project
 # images to build the Prometheus frontent (https://cloud.google.com/docs/buildpacks/base-images).
 ARG IMAGE_BUILD_NODEJS=us-central1-docker.pkg.dev/serverless-runtimes/google-22/runtimes/nodejs22:latest@sha256:9e88442205b4c956ca4996c2be626db6ef412043182cdd620e741d0d5e14b6a6
-ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.10@sha256:09b665734227430d1ec935212cc603c28c74e463cd3d44a53ad199de9c8e9906
+ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.11@sha256:cafcfecdfc9ae0ab09e84613542f3a4da3f0b0eb4f61509f0d3614470a0e4b3c
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/base-nossl-debian12:debug
 ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc:gke_distroless_20251107.00_p0@sha256:b283ae35f3ff42b7d59eaef3b477bf4d146488916e1bd2046ad9484e4a4a023c
 
