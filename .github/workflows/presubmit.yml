@@ -19,7 +19,7 @@ jobs:
     name: Go & npm tests
     runs-on: ubuntu-latest
     container:
-      image: quay.io/prometheus/golang-builder:1.23-base
+      image: quay.io/prometheus/golang-builder:1.24-base
     steps:
     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
@@ -33,15 +33,22 @@ jobs:
     name: Ensure Google image builds (amd64)
     timeout-minutes: 30
     runs-on: ubuntu-latest
+    container:
+      # Use the same image Louhi will use.
+      image: gcr.io/cloud-builders/docker
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+    - name: Add vendoring
+      run: |
+        # Our dockerfile expects npm vendoring, yet this is done during the mirror stage.
+        # Do it on demand here, with exactly the same script that internal CI would use
+        # for both testing and later build purposes.
+        bash ./google_vendor.sh
     - name: Ensure forked image is buildable
       run: |
+        # The same commands we use for building internally.
         docker run --rm --privileged multiarch/qemu-user-static --reset --credential yes --persistent yes
         docker buildx create --name multi-arch-builder --use
-        docker buildx build -t ensure-it-builds:amd64 . --platform linux/amd64 --load
-        # TODO: One day we could enable this, but right now it's OOMing on free GH action.
-        # docker buildx build -t ensure-it-builds:arm64 . --platform linux/arm64 --load
+        DOCKER_BUILDKIT=1 docker buildx build -t gmp-prometheus:amd64 . -f ./Dockerfile.google --platform linux/amd64 --target=app --load
+        # TODO: One day we could enable linux/arm64, but right now it's OOMing on free GH action.
