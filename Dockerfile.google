@@ -1,29 +1,72 @@
-ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs
-ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.11@sha256:cafcfecdfc9ae0ab09e84613542f3a4da3f0b0eb4f61509f0d3614470a0e4b3c
+# This dockerfile is multi target. Use DOCKER_BUILDKIT=1 when building and reference the target:
+# --target=vendor with -o <host local path> to build image with the generated dependencies to copy and vendor on demand.
+# --target=app to build actual application image.
 
+# For the lack of the other official Google nodejs image, we use serverless project
+# images to build the Prometheus frontend (https://cloud.google.com/docs/buildpacks/base-images).
+ARG IMAGE_BUILD_NODEJS=us-central1-docker.pkg.dev/serverless-runtimes/google-22/runtimes/nodejs22:latest@sha256:9e88442205b4c956ca4996c2be626db6ef412043182cdd620e741d0d5e14b6a6
+ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.11@sha256:cafcfecdfc9ae0ab09e84613542f3a4da3f0b0eb4f61509f0d3614470a0e4b3c
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/base-nossl-debian12:debug
 ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc:gke_distroless_20251207.00_p0@sha256:43d5106aa4a3b743fde131c0446be322f398fa2964c819df19aafe4a475ae872
 
 FROM ${IMAGE_BUILD_GO} AS gobase
+WORKDIR /workspace
+# Verify early if we have all we need.
+RUN go version
 
-# Compile the UI assets.
-FROM ${IMAGE_BUILD_NODEJS} as assets
-# To build the UI we need a recent node version and the go toolchain.
-RUN install_node v17.9.0
+FROM ${IMAGE_BUILD_NODEJS} AS nodebase
+WORKDIR /workspace
+# Changed to root,as normally it's underprivileged www-data user.
+# For building stages it's fine to do it as root and have less complex scripts.
+USER root
+# Go, make, git, bzip2 are needed in Prometheus vendor and build steps, take Go
+# from the gobase, rest from apt.
 COPY --from=gobase /usr/local/go /usr/local/
 ENV PATH="/usr/local/go/bin:${PATH}"
-WORKDIR /app
+RUN apt-get update
+RUN apt-get -y install bzip2 make git
+# Verify early if we have all we need.
+RUN npm version
+RUN make -v
+RUN git --version
+RUN bzip2 --version
+RUN go version
+
+# --target=vendor
+FROM gobase AS govendor
 COPY . ./
-RUN pwd
-# Only build the UI but don't run ui-install as we vendor node_modules.
+RUN go mod vendor
+
+FROM nodebase AS nodevendor
+COPY . ./
+# On the nodebase image, the NODE_ENV is set to production, causing npm install
+# to omit devDependencies. That would be normally preferred (much less packages
+# vendored, avoiding security vuln. for deps used for tests), but Prometheus uses
+# some devDependencies for normal build at the moment too e.g. @lezer/generator
+# (custom build script), rollup, tsc (TypeScript) and probably more.
+# Installing those manually later on is prone to errors, especially across
+# different Prometheus versions.
+# TODO(bwplotka): Consider moving those deps in upstream to non-dev lists.
+ENV NODE_ENV="development"
+RUN make ui-install
+
+FROM scratch AS vendor
+COPY --from=govendor /workspace/vendor vendor
+COPY --from=nodevendor /workspace/web/ui/node_modules web/ui/node_modules
+COPY --from=nodevendor /workspace/web/ui/react-app/node_modules web/ui/react-app/node_modules
+
+# --target=app
+# Compile the UI assets.
+FROM nodebase AS assets
+COPY . ./
+# Only build the UI but don't run ui-install; deps should be installed in separate step (--target=vendor).
 RUN make ui-build
 RUN scripts/compress_assets.sh
 RUN make npm_licenses
 
 # Build the actual Go binary.
-FROM gobase as buildbase
-WORKDIR /app
-COPY --from=assets /app ./
+FROM gobase AS buildbase
+COPY --from=assets /workspace ./
 ENV GOEXPERIMENT=boringcrypto
 ENV CGO_ENABLED=1
 ENV GOFIPS140=off
@@ -34,17 +77,27 @@ RUN if [ "${TARGETARCH}" = "arm64" ] && [ "${BUILDARCH}" != "arm64" ]; then \
       apt install -y --no-install-recommends \
         gcc-aarch64-linux-gnu libc6-dev-arm64-cross; \
       CC=aarch64-linux-gnu-gcc; \
-    fi && \ 
+    fi && \
     go build \
     -tags builtinassets -mod=vendor \
     -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
     -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
-    ./cmd/prometheus
+    ./cmd/prometheus && \
+    go build \
+    -mod=vendor \
+    -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
+    -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
+    ./cmd/promtool && \
+    go build \
+    -mod=vendor \
+    -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
+    -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
+    ./google/cmd/prw2gcm
 
 # Configure distroless base image like the upstream Prometheus image.
 # Since the directory and symlink setup needs shell access, we need yet another
 # intermediate stage.
-FROM ${IMAGE_BASE_DEBUG} as appbase
+FROM ${IMAGE_BASE_DEBUG} AS appbase
 
 COPY documentation/examples/prometheus.yml  /etc/prometheus/prometheus.yml
 COPY console_libraries/                     /usr/share/prometheus/console_libraries/
@@ -52,15 +105,17 @@ COPY consoles/                              /usr/share/prometheus/consoles/
 RUN ["/busybox/sh", "-c", "ln -s /usr/share/prometheus/console_libraries /usr/share/prometheus/consoles/ /etc/prometheus/"]
 RUN ["/busybox/sh", "-c", "mkdir -p /prometheus"]
 
-FROM ${IMAGE_BASE}
+FROM ${IMAGE_BASE} AS app
 
-COPY --from=buildbase /app/prometheus /bin/prometheus
+COPY --from=buildbase /workspace/prometheus /bin/prometheus
+COPY --from=buildbase /workspace/promtool /bin/promtool
+COPY --from=buildbase /workspace/prw2gcm /bin/prw2gcm
 COPY --from=appbase --chown=nobody:nobody /etc/prometheus /etc/prometheus
 COPY --from=appbase --chown=nobody:nobody /prometheus /prometheus
 COPY --from=appbase /usr/share/prometheus /usr/share/prometheus
 COPY LICENSE /LICENSE
 COPY NOTICE /NOTICE
-COPY --from=assets /app/npm_licenses.tar.bz2 /npm_licenses.tar.bz2
+COPY --from=assets /workspace/npm_licenses.tar.bz2 /npm_licenses.tar.bz2
 
 USER       nobody
 EXPOSE     9090
