@@ -1,4 +1,4 @@
-ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs@sha256:48c8ffe761db6b81aaae36997b4934537ea84ff82c59aafc6c7fa2589b23ed1d
+ARG IMAGE_BUILD_NODEJS=us-central1-docker.pkg.dev/serverless-runtimes/google-22/runtimes/nodejs22:latest@sha256:9e88442205b4c956ca4996c2be626db6ef412043182cdd620e741d0d5e14b6a6
 ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.11@sha256:cafcfecdfc9ae0ab09e84613542f3a4da3f0b0eb4f61509f0d3614470a0e4b3c
 
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/base-nossl-debian12:debug
@@ -8,13 +8,20 @@ FROM ${IMAGE_BUILD_GO} AS gobase
 
 # Compile the UI assets.
 FROM ${IMAGE_BUILD_NODEJS} as assets
-# To build the UI we need a recent node version and the go toolchain.
-RUN install_node v17.9.0
 COPY --from=gobase /usr/local/go /usr/local/
 ENV PATH="/usr/local/go/bin:${PATH}"
 WORKDIR /app
 COPY . ./
 RUN pwd
+# On the nodebase image, the NODE_ENV is set to production, causing npm install
+# to omit devDependencies. That would be normally preferred (much less packages
+# vendored, avoiding security vuln. for deps used for tests), but Prometheus uses
+# some devDependencies for normal build at the moment too e.g. @lezer/generator
+# (custom build script), rollup, tsc (TypeScript) and probably more.
+# Installing those manually later on is prone to errors, especially across
+# different Prometheus versions.
+# TODO(bwplotka): Consider moving those deps in upstream to non-dev lists.
+ENV NODE_ENV="development"
 # Only build the UI but don't run ui-install as we vendor node_modules.
 RUN make ui-build
 RUN scripts/compress_assets.sh
