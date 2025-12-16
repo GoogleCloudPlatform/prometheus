@@ -1385,7 +1385,7 @@ func TestScrapeLoopCacheMemoryExhaustionProtection(t *testing.T) {
 			for i := 0; i < 500; i++ {
 				s = fmt.Sprintf("%smetric_%d_%d 42\n", s, i, numScrapes)
 			}
-			w.Write([]byte(fmt.Sprintf(s + "&")))
+			w.Write([]byte(fmt.Sprintf("%s&", s)))
 		} else {
 			cancel()
 		}

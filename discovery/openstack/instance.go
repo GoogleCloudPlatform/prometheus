@@ -119,7 +119,7 @@ func (i *InstanceDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group, 
 	}
 	pager := servers.List(client, opts)
 	tg := &targetgroup.Group{
-		Source: fmt.Sprintf("OS_" + i.region),
+		Source: fmt.Sprintf("OS_%s", i.region),
 	}
 	err = pager.EachPage(func(page pagination.Page) (bool, error) {
 		if ctx.Err() != nil {

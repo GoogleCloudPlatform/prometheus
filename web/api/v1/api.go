@@ -994,7 +994,7 @@ func (api *API) targets(r *http.Request) apiFuncResult {
 						case err == nil && lastErrStr == "":
 							return ""
 						case err != nil:
-							return errors.Wrapf(err, lastErrStr).Error()
+							return errors.Wrap(err, lastErrStr).Error()
 						default:
 							return lastErrStr
 						}

@@ -3,7 +3,10 @@
 //line promql/parser/generated_parser.y:15
 package parser
 
-import __yyfmt__ "fmt"
+import (
+	"errors"
+	__yyfmt__ "fmt"
+)
 
 //line promql/parser/generated_parser.y:15
 
@@ -1318,7 +1321,7 @@ yydefault:
 
 			if errMsg != "" {
 				errRange := mergeRanges(&yyDollar[2].item, &yyDollar[4].item)
-				yylex.(*parser).addParseErrf(errRange, errMsg)
+				yylex.(*parser).addParseErr(errRange, errors.New(errMsg))
 			}
 
 			yyVAL.node = &MatrixSelector{
