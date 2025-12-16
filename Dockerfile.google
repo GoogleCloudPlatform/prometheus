@@ -8,9 +8,22 @@ FROM ${IMAGE_BUILD_GO} AS gobase
 
 # Compile the UI assets.
 FROM ${IMAGE_BUILD_NODEJS} as assets
+# Changed to root,as normally it's underprivileged www-data user.
+# For building stages it's fine to do it as root and have less complex scripts.
+USER root
+WORKDIR /app
+# Go, make, git, bzip2 are needed in Prometheus vendor and build steps, take Go
+# from the gobase, rest from apt.
 COPY --from=gobase /usr/local/go /usr/local/
 ENV PATH="/usr/local/go/bin:${PATH}"
-WORKDIR /app
+RUN apt-get update
+RUN apt-get -y install bzip2 make git
+# Verify early if we have all we need.
+RUN npm version
+RUN make -v
+RUN git --version
+RUN bzip2 --version
+RUN go version
 COPY . ./
 RUN pwd
 # On the nodebase image, the NODE_ENV is set to production, causing npm install

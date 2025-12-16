@@ -72,7 +72,7 @@ func (h *HypervisorDiscovery) refresh(ctx context.Context) ([]*targetgroup.Group
 	}
 
 	tg := &targetgroup.Group{
-		Source: fmt.Sprintf("OS_" + h.region),
+		Source: fmt.Sprintf("OS_%s", h.region),
 	}
 	// OpenStack API reference
 	// https://developer.openstack.org/api-ref/compute/#list-hypervisors-details
