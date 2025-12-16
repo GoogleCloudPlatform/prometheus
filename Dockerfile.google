@@ -1,4 +1,4 @@
-ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs
+ARG IMAGE_BUILD_NODEJS=launcher.gcr.io/google/nodejs@sha256:48c8ffe761db6b81aaae36997b4934537ea84ff82c59aafc6c7fa2589b23ed1d
 ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.24.11@sha256:cafcfecdfc9ae0ab09e84613542f3a4da3f0b0eb4f61509f0d3614470a0e4b3c
 
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/base-nossl-debian12:debug
