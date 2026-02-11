@@ -64,7 +64,6 @@ func TestSeriesCache_populate_Info(t *testing.T) {
 		t.Fatalf("populate failed: %v", err)
 	}
 
-	// Verify the cache entry.
 	if entry.protos.gauge.proto == nil {
 		t.Fatal("expected gauge proto to be populated for Info metric")
 	}
@@ -74,20 +73,16 @@ func TestSeriesCache_populate_Info(t *testing.T) {
 
 	p := entry.protos.gauge.proto
 
-	// Check MetricKind
 	if p.MetricKind != metric_pb.MetricDescriptor_GAUGE {
 		t.Errorf("expected MetricKind GAUGE, got %v", p.MetricKind)
 	}
-	// Check ValueType
 	if p.ValueType != metric_pb.MetricDescriptor_DOUBLE {
 		t.Errorf("expected ValueType DOUBLE, got %v", p.ValueType)
 	}
-	// Check Type (name)
 	expectedType := "prometheus.googleapis.com/test_info/gauge"
 	if p.Metric.Type != expectedType {
 		t.Errorf("expected Metric Type %q, got %q", expectedType, p.Metric.Type)
 	}
-	// Check Description
 	if p.Description != "info help" {
 		t.Errorf("expected Description 'info help', got %q", p.Description)
 	}
