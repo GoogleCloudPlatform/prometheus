@@ -31,7 +31,7 @@ import (
 func TestSeriesCache_populate_Info(t *testing.T) {
 	cache := newSeriesCache(nil, nil, MetricTypePrefix)
 
-	// Mock getLabelsByRef to return labels for our info metric
+	// Mock getLabelsByRef to return labels for our info metric.
 	ref := storage.SeriesRef(1)
 	metricName := "test_info"
 	lset := labels.FromStrings("__name__", metricName, "job", "test_job", "instance", "test_instance", "version", "1.2.3")
@@ -42,10 +42,10 @@ func TestSeriesCache_populate_Info(t *testing.T) {
 		return labels.EmptyLabels()
 	}
 
-	// Prepare entry
+	// Prepare entry.
 	entry := &seriesCacheEntry{}
 
-	// Metadata function returning Info type
+	// Metadata function returning Info type.
 	mdFunc := func(m string) (MetricMetadata, bool) {
 		if m == metricName {
 			return MetricMetadata{
@@ -57,15 +57,14 @@ func TestSeriesCache_populate_Info(t *testing.T) {
 		return MetricMetadata{}, false
 	}
 
-	// Call populate
-	// Provide required external labels (project_id, location) to pass extractResource
+	// Populate cache. Provide required external labels (project_id, location).
 	externalLabels := labels.FromStrings("project_id", "my-project", "location", "us-central1")
 	err := cache.populate(ref, entry, externalLabels, mdFunc)
 	if err != nil {
 		t.Fatalf("populate failed: %v", err)
 	}
 
-	// Verify
+	// Verify the cache entry.
 	if entry.protos.gauge.proto == nil {
 		t.Fatal("expected gauge proto to be populated for Info metric")
 	}
