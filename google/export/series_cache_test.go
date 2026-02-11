@@ -19,12 +19,80 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/record"
+	metric_pb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredres_pb "google.golang.org/genproto/googleapis/api/monitoredres"
 	"google.golang.org/protobuf/testing/protocmp"
 )
+
+func TestSeriesCache_populate_Info(t *testing.T) {
+	cache := newSeriesCache(nil, nil, MetricTypePrefix)
+
+	// Mock getLabelsByRef to return labels for our info metric
+	ref := storage.SeriesRef(1)
+	metricName := "test_info"
+	lset := labels.FromStrings("__name__", metricName, "job", "test_job", "instance", "test_instance", "version", "1.2.3")
+	cache.getLabelsByRef = func(r storage.SeriesRef) labels.Labels {
+		if r == ref {
+			return lset
+		}
+		return labels.EmptyLabels()
+	}
+
+	// Prepare entry
+	entry := &seriesCacheEntry{}
+
+	// Metadata function returning Info type
+	mdFunc := func(m string) (MetricMetadata, bool) {
+		if m == metricName {
+			return MetricMetadata{
+				Metric: metricName,
+				Type:   model.MetricTypeInfo,
+				Help:   "info help",
+			}, true
+		}
+		return MetricMetadata{}, false
+	}
+
+	// Call populate
+	// Provide required external labels (project_id, location) to pass extractResource
+	externalLabels := labels.FromStrings("project_id", "my-project", "location", "us-central1")
+	err := cache.populate(ref, entry, externalLabels, mdFunc)
+	if err != nil {
+		t.Fatalf("populate failed: %v", err)
+	}
+
+	// Verify
+	if entry.protos.gauge.proto == nil {
+		t.Fatal("expected gauge proto to be populated for Info metric")
+	}
+	if entry.protos.cumulative.proto != nil {
+		t.Error("expected cumulative proto to be nil for Info metric")
+	}
+
+	p := entry.protos.gauge.proto
+
+	// Check MetricKind
+	if p.MetricKind != metric_pb.MetricDescriptor_GAUGE {
+		t.Errorf("expected MetricKind GAUGE, got %v", p.MetricKind)
+	}
+	// Check ValueType
+	if p.ValueType != metric_pb.MetricDescriptor_DOUBLE {
+		t.Errorf("expected ValueType DOUBLE, got %v", p.ValueType)
+	}
+	// Check Type (name)
+	expectedType := "prometheus.googleapis.com/test_info/gauge"
+	if p.Metric.Type != expectedType {
+		t.Errorf("expected Metric Type %q, got %q", expectedType, p.Metric.Type)
+	}
+	// Check Description
+	if p.Description != "info help" {
+		t.Errorf("expected Description 'info help', got %q", p.Description)
+	}
+}
 
 func TestExtractResource(t *testing.T) {
 	cases := []struct {

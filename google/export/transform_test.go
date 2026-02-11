@@ -144,6 +144,47 @@ func TestSampleBuilder(t *testing.T) {
 				},
 			},
 		}, {
+			doc: "convert info metric",
+			metadata: testMetadataFunc(metricMetadataMap{
+				"metric1_info": {Type: model.MetricTypeInfo, Help: "metric1_info help text"},
+			}),
+			series: seriesMap{
+				123: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_info", "version", "1.2.3"),
+			},
+			samples: [][]record.RefSample{
+				{{Ref: 123, T: 3000, V: 1}},
+			},
+			wantSeries: []*monitoring_pb.TimeSeries{
+				{
+					Resource: &monitoredres_pb.MonitoredResource{
+						Type: "prometheus_target",
+						Labels: map[string]string{
+							"project_id": "example-project",
+							"location":   "europe",
+							"cluster":    "foo-cluster",
+							"namespace":  "",
+							"job":        "job1",
+							"instance":   "instance1",
+						},
+					},
+					Metric: &metric_pb.Metric{
+						Type:   "prometheus.googleapis.com/metric1_info/gauge",
+						Labels: map[string]string{"version": "1.2.3"},
+					},
+					Description: "metric1_info help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
+					Points: []*monitoring_pb.Point{{
+						Interval: &monitoring_pb.TimeInterval{
+							EndTime: &timestamp_pb.Timestamp{Seconds: 3},
+						},
+						Value: &monitoring_pb.TypedValue{
+							Value: &monitoring_pb.TypedValue_DoubleValue{DoubleValue: 1},
+						},
+					}},
+				},
+			},
+		}, {
 			doc: "convert untyped",
 			metadata: testMetadataFunc(metricMetadataMap{
 				"metric1": {Type: model.MetricTypeUnknown, Help: "metric1 help text"},
