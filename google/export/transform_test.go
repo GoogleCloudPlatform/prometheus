@@ -185,6 +185,47 @@ func TestSampleBuilder(t *testing.T) {
 				},
 			},
 		}, {
+			doc: "convert stateset metric",
+			metadata: testMetadataFunc(metricMetadataMap{
+				"metric1_stateset": {Type: model.MetricTypeStateset, Help: "metric1_stateset help text"},
+			}),
+			series: seriesMap{
+				123: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_stateset", "metric1_stateset", "state1"),
+			},
+			samples: [][]record.RefSample{
+				{{Ref: 123, T: 3000, V: 1}},
+			},
+			wantSeries: []*monitoring_pb.TimeSeries{
+				{
+					Resource: &monitoredres_pb.MonitoredResource{
+						Type: "prometheus_target",
+						Labels: map[string]string{
+							"project_id": "example-project",
+							"location":   "europe",
+							"cluster":    "foo-cluster",
+							"namespace":  "",
+							"job":        "job1",
+							"instance":   "instance1",
+						},
+					},
+					Metric: &metric_pb.Metric{
+						Type:   "prometheus.googleapis.com/metric1_stateset/gauge",
+						Labels: map[string]string{"metric1_stateset": "state1"},
+					},
+					Description: "metric1_stateset help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
+					Points: []*monitoring_pb.Point{{
+						Interval: &monitoring_pb.TimeInterval{
+							EndTime: &timestamp_pb.Timestamp{Seconds: 3},
+						},
+						Value: &monitoring_pb.TypedValue{
+							Value: &monitoring_pb.TypedValue_DoubleValue{DoubleValue: 1},
+						},
+					}},
+				},
+			},
+		}, {
 			doc: "convert untyped",
 			metadata: testMetadataFunc(metricMetadataMap{
 				"metric1": {Type: model.MetricTypeUnknown, Help: "metric1 help text"},

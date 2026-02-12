@@ -279,6 +279,22 @@ func TestExporter_wrapMetadata(t *testing.T) {
 			},
 			wantOK: true,
 		}, {
+			desc: "stateset metadata is returned as is",
+			mf: func(string) (MetricMetadata, bool) {
+				return MetricMetadata{
+					Metric: "some_stateset_metric",
+					Type:   model.MetricTypeStateset,
+					Help:   "stateset help",
+				}, true
+			},
+			metric: "some_stateset_metric",
+			want: MetricMetadata{
+				Metric: "some_stateset_metric",
+				Type:   model.MetricTypeStateset,
+				Help:   "stateset help",
+			},
+			wantOK: true,
+		}, {
 			desc: "not found metadata defaults to untyped",
 			mf: func(string) (MetricMetadata, bool) {
 				return MetricMetadata{}, false
