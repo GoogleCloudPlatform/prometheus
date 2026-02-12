@@ -88,6 +88,65 @@ func TestSeriesCache_populate_Info(t *testing.T) {
 	}
 }
 
+func TestSeriesCache_populate_Stateset(t *testing.T) {
+	cache := newSeriesCache(nil, nil, MetricTypePrefix)
+
+	// Mock getLabelsByRef to return labels for our info metric.
+	ref := storage.SeriesRef(1)
+	metricName := "test_stateset"
+	lset := labels.FromStrings("__name__", metricName, "job", "test_job", "instance", "test_instance", "test_stateset", "state1")
+	cache.getLabelsByRef = func(r storage.SeriesRef) labels.Labels {
+		if r == ref {
+			return lset
+		}
+		return labels.EmptyLabels()
+	}
+
+	// Prepare entry.
+	entry := &seriesCacheEntry{}
+
+	mdFunc := func(m string) (MetricMetadata, bool) {
+		if m == metricName {
+			return MetricMetadata{
+				Metric: metricName,
+				Type:   model.MetricTypeStateset,
+				Help:   "stateset help",
+			}, true
+		}
+		return MetricMetadata{}, false
+	}
+
+	// Populate cache. Provide required external labels (project_id, location).
+	externalLabels := labels.FromStrings("project_id", "my-project", "location", "us-central1")
+	err := cache.populate(ref, entry, externalLabels, mdFunc)
+	if err != nil {
+		t.Fatalf("populate failed: %v", err)
+	}
+
+	if entry.protos.gauge.proto == nil {
+		t.Fatal("expected gauge proto to be populated for Stateset metric")
+	}
+	if entry.protos.cumulative.proto != nil {
+		t.Error("expected cumulative proto to be nil for Stateset metric")
+	}
+
+	p := entry.protos.gauge.proto
+
+	if p.MetricKind != metric_pb.MetricDescriptor_GAUGE {
+		t.Errorf("expected MetricKind GAUGE, got %v", p.MetricKind)
+	}
+	if p.ValueType != metric_pb.MetricDescriptor_DOUBLE {
+		t.Errorf("expected ValueType DOUBLE, got %v", p.ValueType)
+	}
+	expectedType := "prometheus.googleapis.com/test_stateset/gauge"
+	if p.Metric.Type != expectedType {
+		t.Errorf("expected Metric Type %q, got %q", expectedType, p.Metric.Type)
+	}
+	if p.Description != "stateset help" {
+		t.Errorf("expected Description 'stateset help', got %q", p.Description)
+	}
+}
+
 func TestExtractResource(t *testing.T) {
 	cases := []struct {
 		doc            string

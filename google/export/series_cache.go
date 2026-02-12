@@ -454,6 +454,14 @@ func (c *seriesCache) populate(ref storage.SeriesRef, entry *seriesCacheEntry, e
 			metric_pb.MetricDescriptor_DOUBLE,
 		)
 
+	case model.MetricTypeStateset:
+		protos.gauge = newSeries(
+			c.getMetricType(metricName, gcmMetricSuffixGauge, gcmMetricSuffixNone),
+			metadata.Help,
+			metric_pb.MetricDescriptor_GAUGE,
+			metric_pb.MetricDescriptor_DOUBLE,
+		)
+
 	case model.MetricTypeUnknown:
 		protos.gauge = newSeries(
 			c.getMetricType(metricName, gcmMetricSuffixUnknown, gcmMetricSuffixNone),

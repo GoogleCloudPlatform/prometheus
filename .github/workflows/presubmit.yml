@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       # Use the same image Louhi will use.
-      image: gcr.io/cloud-builders/docker
+      image: gcr.io/cloud-builders/docker:latest
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
