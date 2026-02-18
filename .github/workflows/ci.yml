@@ -206,7 +206,7 @@ jobs:
             ${{ runner.os }}-node-
       - name: Check libraries version
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.')
-        run: ./scripts/ui_release.sh --check-package "$(echo ${{ github.ref_name }}|sed s/v2/v0/)"
+        run: ./scripts/ui_release.sh --check-package "$(echo ${GITHUB_REF_NAME}|sed s/v2/v0/)"
       - name: build
         run: make assets
       - name: Copy files before publishing libs
