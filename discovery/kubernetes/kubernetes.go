@@ -859,7 +859,7 @@ func (d *Discovery) newEndpointSlicesByNodeInformer(plw *cache.ListWatch, object
 
 func (d *Discovery) informerWatchErrorHandler(r *cache.Reflector, err error) {
 	d.metrics.failuresCount.Inc()
-	cache.DefaultWatchErrorHandler(r, err)
+	cache.DefaultWatchErrorHandler(context.Background(), r, err)
 }
 
 func (d *Discovery) mustNewSharedInformer(lw cache.ListerWatcher, exampleObject runtime.Object, defaultEventHandlerResyncPeriod time.Duration) cache.SharedInformer {

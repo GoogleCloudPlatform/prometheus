@@ -54,7 +54,6 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/automaxprocs/maxprocs"
 	"k8s.io/klog"
-	klogv2 "k8s.io/klog/v2"
 
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery"
@@ -632,8 +631,6 @@ func main() {
 	// Above level 6, the k8s client would log bearer tokens in clear-text.
 	klog.ClampLevel(6)
 	klog.SetLogger(log.With(logger, "component", "k8s_client_runtime"))
-	klogv2.ClampLevel(6)
-	klogv2.SetLogger(log.With(logger, "component", "k8s_client_runtime"))
 
 	modeAppName := "Prometheus Server"
 	mode := "server"
