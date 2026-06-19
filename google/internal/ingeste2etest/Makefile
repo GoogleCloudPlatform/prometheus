@@ -1,0 +1,3 @@
+.PHONY: test
+test:
+	go test -tags gcme2e -count=1 -timeout 90m -v ./...
