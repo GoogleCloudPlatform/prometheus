@@ -16,6 +16,7 @@ package export
 
 import (
 	"testing"
+	"time"
 
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
@@ -147,4 +148,26 @@ func TestKongHistogramInconsistencies(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHistogramResetsCleanup(t *testing.T) {
+	cache := newSeriesCache(nil, nil, "prometheus.googleapis.com/")
+	cache.histogramResets[12345] = 1000000
+	cache.histogramResets[67890] = 1000000
+
+	// Add an active entry for hash 12345.
+	cache.entries[1] = &seriesCacheEntry{
+		lastUsed: cache.now().Unix(),
+		metadata: MetricMetadata{Type: model.MetricTypeHistogram},
+		protos:   cachedProtos{cumulative: hashedSeries{hash: 12345}},
+	}
+
+	err := cache.garbageCollect(time.Minute)
+	require.NoError(t, err)
+
+	assert.Contains(t, cache.histogramResets, uint64(12345))
+	assert.NotContains(t, cache.histogramResets, uint64(67890))
+
+	cache.clear()
+	assert.Empty(t, cache.histogramResets)
 }

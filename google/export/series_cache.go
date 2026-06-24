@@ -217,6 +217,9 @@ func (c *seriesCache) clear() {
 		c.pool.release(entry.protos.cumulative.proto)
 		delete(c.entries, ref)
 	}
+	for k := range c.histogramResets {
+		delete(c.histogramResets, k)
+	}
 }
 
 // garbageCollect drops obsolete cache entries that have not been updated for
@@ -236,15 +239,24 @@ func (c *seriesCache) garbageCollect(delay time.Duration) error {
 	// up our memory usage in high-churn environments.
 	deleteBefore := start.Add(-delay).Unix()
 	i := 0
+	activeHashes := make(map[uint64]struct{})
 
 	for ref, entry := range c.entries {
 		if entry.lastUsed >= deleteBefore {
+			if entry.metadata.Type == model.MetricTypeHistogram {
+				activeHashes[entry.protos.cumulative.hash] = struct{}{}
+			}
 			continue
 		}
 		c.pool.release(entry.protos.gauge.proto)
 		c.pool.release(entry.protos.cumulative.proto)
 		delete(c.entries, ref)
 		i++
+	}
+	for h := range c.histogramResets {
+		if _, ok := activeHashes[h]; !ok {
+			delete(c.histogramResets, h)
+		}
 	}
 	//nolint:errcheck
 	level.Info(c.logger).Log("msg", "garbage collection completed", "took", time.Since(start), "seriesPurged", i)
