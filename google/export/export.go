@@ -218,6 +218,10 @@ type ExporterOpts struct {
 	// how it's applied dynamically in conjunction with Export.Match runtime option.
 	Matchers Matchers
 
+	// A list of metric matchers for debugging gRPC requests. Logs exact gRPC requests
+	// containing any time series matching these matchers.
+	DebugLogMatchers Matchers
+
 	// Prefix under which metrics are written to GCM.
 	MetricTypePrefix string
 
@@ -710,7 +714,7 @@ func (e *Exporter) Run() error {
 	opts := e.opts
 	e.mtx.RUnlock()
 
-	curBatch := newBatch(e.logger, opts.Efficiency.ShardCount, opts.Efficiency.BatchSize)
+	curBatch := newBatch(e.logger, opts.Efficiency.ShardCount, opts.Efficiency.BatchSize, opts.DebugLogMatchers, opts.MetricTypePrefix)
 
 	// Send the currently accumulated batch to GCM asynchronously.
 	send := func() {
@@ -736,7 +740,7 @@ func (e *Exporter) Run() error {
 		stopTimer()
 		timer.Reset(batchDelayMax)
 
-		curBatch = newBatch(e.logger, opts.Efficiency.ShardCount, opts.Efficiency.BatchSize)
+		curBatch = newBatch(e.logger, opts.Efficiency.ShardCount, opts.Efficiency.BatchSize, opts.DebugLogMatchers, opts.MetricTypePrefix)
 	}
 
 	for {
@@ -943,8 +947,10 @@ func (e *Exporter) withUntypedDefaultMetadata(f MetadataFunc) MetadataFunc {
 // batch accumulates a batch of samples to be sent to GCM. Once the batch is full
 // it must be sent and cannot be used anymore after that.
 type batch struct {
-	logger  log.Logger
-	maxSize uint
+	logger           log.Logger
+	maxSize          uint
+	debugLogMatchers Matchers
+	metricTypePrefix string
 
 	m       map[string][]*monitoring_pb.TimeSeries
 	shards  []*shard
@@ -952,15 +958,17 @@ type batch struct {
 	total   int
 }
 
-func newBatch(logger log.Logger, shardsCount uint, maxSize uint) *batch {
+func newBatch(logger log.Logger, shardsCount uint, maxSize uint, debugLogMatchers Matchers, metricTypePrefix string) *batch {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
 	return &batch{
-		logger:  logger,
-		maxSize: maxSize,
-		m:       make(map[string][]*monitoring_pb.TimeSeries, 1),
-		shards:  make([]*shard, 0, shardsCount/2),
+		logger:           logger,
+		maxSize:          maxSize,
+		debugLogMatchers: debugLogMatchers,
+		metricTypePrefix: metricTypePrefix,
+		m:                make(map[string][]*monitoring_pb.TimeSeries, 1),
+		shards:           make([]*shard, 0, shardsCount/2),
 	}
 }
 
@@ -1002,6 +1010,55 @@ func (b *batch) empty() bool {
 	return b.total == 0
 }
 
+func extractMetricName(metricType, prefix string) string {
+	if prefix != "" && strings.HasPrefix(metricType, prefix+"/") {
+		metricType = metricType[len(prefix)+1:]
+	}
+	idx := strings.LastIndexByte(metricType, '/')
+	if idx < 0 {
+		return metricType
+	}
+	return metricType[:idx]
+}
+
+func timeSeriesToLabels(ts *monitoring_pb.TimeSeries, prefix string) labels.Labels {
+	if ts == nil {
+		return labels.EmptyLabels()
+	}
+	builder := labels.NewBuilder(labels.EmptyLabels())
+	if name := extractMetricName(ts.GetMetric().GetType(), prefix); name != "" {
+		builder.Set(labels.MetricName, name)
+	}
+	for k, v := range ts.GetResource().GetLabels() {
+		builder.Set(k, v)
+	}
+	for k, v := range ts.GetMetric().GetLabels() {
+		builder.Set(k, v)
+	}
+	return builder.Labels()
+}
+
+func logDebugGRPCRequest(logger log.Logger, matchers Matchers, prefix string, req *monitoring_pb.CreateTimeSeriesRequest) {
+	if len(matchers) == 0 || req == nil {
+		return
+	}
+	var matchedSeries []*monitoring_pb.TimeSeries
+	for _, ts := range req.TimeSeries {
+		lset := timeSeriesToLabels(ts, prefix)
+		if matchers.Matches(lset) {
+			matchedSeries = append(matchedSeries, ts)
+		}
+	}
+	if len(matchedSeries) > 0 {
+		debugReq := &monitoring_pb.CreateTimeSeriesRequest{
+			Name:       req.Name,
+			TimeSeries: matchedSeries,
+		}
+		//nolint:errcheck
+		level.Debug(logger).Log("msg", "gRPC CreateTimeSeries request matching debug matchers", "matchers", matchers.String(), "series_count", len(matchedSeries), "req", debugReq.String())
+	}
+}
+
 // send the accumulated samples to their respective projects. It returns once all
 // requests have completed and notifies the pending shards.
 func (b *batch) send(
@@ -1028,10 +1085,14 @@ func (b *batch) send(
 
 			// We do not retry any requests due to the risk of producing a backlog
 			// that cannot be worked down, especially if large amounts of clients try to do so.
-			err := sendOne(sendCtx, &monitoring_pb.CreateTimeSeriesRequest{
+			req := &monitoring_pb.CreateTimeSeriesRequest{
 				Name:       fmt.Sprintf("projects/%s", pid),
 				TimeSeries: l,
-			})
+			}
+			if len(b.debugLogMatchers) > 0 {
+				logDebugGRPCRequest(b.logger, b.debugLogMatchers, b.metricTypePrefix, req)
+			}
+			err := sendOne(sendCtx, req)
 			if err != nil {
 				//nolint:errcheck
 				level.Error(b.logger).Log("msg", "send batch", "size", len(l), "err", err)
