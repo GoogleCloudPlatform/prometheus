@@ -36,7 +36,8 @@ import (
 // evaluation service), Storage acts as a simple drop-in replacement that directly
 // manages the state required by Exporter.
 type Storage struct {
-	exporter *Exporter
+	exporter     *Exporter
+	metadataFunc MetadataFunc
 
 	mtx    sync.Mutex
 	labels map[storage.SeriesRef]labels.Labels
@@ -120,14 +121,11 @@ func (a *storageAppender) Append(_ storage.SeriesRef, lset labels.Labels, t int6
 }
 
 func (a *storageAppender) Commit() error {
-	// This method is used to export rule results. It's generally safe to assume that
-	// they are of type gauge. Thus we pass in a metadata func that always returns the
-	// gauge type.
-	// In the future we may want to populate the help text with information on the rule
-	// that produced the metric.
-	// Exemplars can be nil since rules do not query for exemplars.
-	// This support is raised in https://github.com/prometheus/prometheus/issues/8798.
-	a.storage.exporter.Export(gaugeMetadata, a.samples, nil)
+	mf := a.storage.metadataFunc
+	if mf == nil {
+		mf = gaugeMetadata
+	}
+	a.storage.exporter.Export(mf, a.samples, nil)
 
 	// After export is complete, we can clear the labels again.
 	a.storage.clearLabels(a.samples)
