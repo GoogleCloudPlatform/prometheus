@@ -1055,7 +1055,7 @@ func logDebugGRPCRequest(logger log.Logger, matchers Matchers, prefix string, re
 			TimeSeries: matchedSeries,
 		}
 		//nolint:errcheck
-		level.Debug(logger).Log("msg", "gRPC CreateTimeSeries request matching debug matchers", "matchers", matchers.String(), "series_count", len(matchedSeries), "req", debugReq.String())
+		level.Debug(logger).Log("msg", "gRPC CreateTimeSeries request matching debug matchers", "matchers", matchers.String(), "series_count", len(matchedSeries), "req", debugReq)
 	}
 }
 
