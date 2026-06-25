@@ -15,6 +15,7 @@
 package export
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -39,11 +40,12 @@ import (
 	"github.com/stretchr/testify/require"
 	monitoredres_pb "google.golang.org/genproto/googleapis/api/monitoredres"
 	timestamp_pb "google.golang.org/protobuf/types/known/timestamppb"
+	metric_pb "google.golang.org/genproto/googleapis/api/metric"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 func TestBatchAdd(t *testing.T) {
-	b := newBatch(nil, DefaultShardCount, 100)
+	b := newBatch(nil, DefaultShardCount, 100, nil, "")
 
 	if !b.empty() {
 		t.Fatalf("batch unexpectedly not empty")
@@ -100,7 +102,7 @@ func TestBatchFillFromShardsAndSend(t *testing.T) {
 		})
 	}
 
-	b := newBatch(nil, DefaultShardCount, 101)
+	b := newBatch(nil, DefaultShardCount, 101, nil, "")
 
 	for _, s := range shards {
 		s.fill(b)
@@ -875,4 +877,58 @@ func TestMatchers_Equals(t *testing.T) {
 	require.NoError(t, diff6.Set(`{bar="x",name="foo"}`))
 	require.False(t, m.Equals(diff6))
 	require.False(t, diff6.Equals(m))
+}
+
+func TestDebugLogGRPCRequest(t *testing.T) {
+	var buf bytes.Buffer
+	logger := log.NewLogfmtLogger(&buf)
+
+	var matchers Matchers
+	require.NoError(t, matchers.Set(`{__name__="up"}`))
+
+	req := &monitoring_pb.CreateTimeSeriesRequest{
+		Name: "projects/test-proj",
+		TimeSeries: []*monitoring_pb.TimeSeries{
+			{
+				Resource: &monitoredres_pb.MonitoredResource{
+					Type: "prometheus_target",
+					Labels: map[string]string{
+						"project_id": "test-proj",
+					},
+				},
+				Metric: &metric_pb.Metric{
+					Type: "prometheus.googleapis.com/up/gauge",
+					Labels: map[string]string{
+						"instance": "localhost:9090",
+					},
+				},
+			},
+			{
+				Resource: &monitoredres_pb.MonitoredResource{
+					Type: "prometheus_target",
+					Labels: map[string]string{
+						"project_id": "test-proj",
+					},
+				},
+				Metric: &metric_pb.Metric{
+					Type: "prometheus.googleapis.com/other_metric/gauge",
+					Labels: map[string]string{
+						"instance": "localhost:9090",
+					},
+				},
+			},
+		},
+	}
+
+	// First test: no matchers set should not log.
+	logDebugGRPCRequest(logger, nil, "prometheus.googleapis.com", req)
+	require.Empty(t, buf.String())
+
+	// Second test: matchers set should log only the matching series.
+	logDebugGRPCRequest(logger, matchers, "prometheus.googleapis.com", req)
+	out := buf.String()
+	require.Contains(t, out, "gRPC CreateTimeSeries request matching debug matchers")
+	require.Contains(t, out, "series_count=1")
+	require.Contains(t, out, "prometheus.googleapis.com/up/gauge")
+	require.NotContains(t, out, "other_metric")
 }

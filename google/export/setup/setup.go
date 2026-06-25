@@ -138,6 +138,9 @@ func ExporterOptsFlags(a *kingpin.Application, opts *export.ExporterOpts) {
 	a.Flag("export.match", `A Prometheus time series matcher. Matches all series if empty. Can be repeated. Every time series must match at least one of the matchers to be exported. This flag can be used equivalently to the match[] parameter of the Prometheus federation endpoint to selectively export data. External labels are excluded from matching. (Example: --export.match='{job="prometheus"}' --export.match='{__name__=~"job:.*"}). This flag can be overridden by Prometheus google_cloud.export runtime configuration.`).
 		Default("").Hidden().SetValue(&opts.Matchers)
 
+	a.Flag("export.debug.log-match", "A Prometheus time series matcher for debugging gRPC requests. Logs exact gRPC requests containing any time series matching these matchers. Can be repeated.").
+		Default("").SetValue(&opts.DebugLogMatchers)
+
 	a.Flag("export.debug.metric-prefix", "Google Cloud Monitoring metric prefix to use.").
 		Default(opts.MetricTypePrefix).
 		StringVar(&opts.MetricTypePrefix)

@@ -100,3 +100,17 @@ func TestTryPopulateUnspecifiedFromMetadata(t *testing.T) {
 		t.Fatal("tryPopulateUnspecifiedFromMetadata took 30s to complete, it should timeout after 1s")
 	}
 }
+
+func TestExporterOptsFlags_DebugLogMatch(t *testing.T) {
+	fake := kingpin.New("test", "test")
+	opts := export.ExporterOpts{}
+	ExporterOptsFlags(fake, &opts)
+
+	if _, err := fake.Parse([]string{"--export.debug.log-match={__name__=\"up\",job=\"prometheus\"}", "--export.debug.log-match={env=\"prod\"}"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(opts.DebugLogMatchers) != 2 {
+		t.Fatalf("expected 2 debug log matchers, got %d", len(opts.DebugLogMatchers))
+	}
+}
