@@ -110,9 +110,9 @@ var (
 		Buckets: []float64{1, 2, 5, 10, 20, 50, 100, 150, 200},
 	})
 	ErrLocationGlobal = errors.New("location must be set to a named Google Cloud " +
-			"region and cannot be set to \"global\". please choose the " +
-			"Google Cloud region that is physically nearest to your cluster. " +
-			"see https://www.cloudinfrastructuremap.com/")
+		"region and cannot be set to \"global\". please choose the " +
+		"Google Cloud region that is physically nearest to your cluster. " +
+		"see https://www.cloudinfrastructuremap.com/")
 )
 
 type metricServiceClient interface {
@@ -146,6 +146,10 @@ type Exporter struct {
 	// It is checked for on each batch provided to the Export method.
 	// If unset, data is always sent.
 	lease Lease
+
+	// Tracks start timestamps for distributions to detect overlaps (older timestamp sent).
+	distStartTimesMtx sync.Mutex
+	distStartTimes    map[uint64]time.Time
 
 	// Used to construct a new metric client when options change, or at initialization. It
 	// is exposed as a variable so that unit tests may change the constructor.
@@ -426,6 +430,7 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 		shards:               make([]*shard, opts.Efficiency.ShardCount),
 		warnedUntypedMetrics: map[string]struct{}{},
 		lease:                lease,
+		distStartTimes:       make(map[uint64]time.Time),
 	}
 
 	// Set initial matchers.
@@ -434,7 +439,10 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 
 	// Whenever the lease is lost, clear the series cache so we don't start off of out-of-range
 	// reset timestamps when we gain the lease again.
-	lease.OnLeaderChange(e.seriesCache.clear)
+	lease.OnLeaderChange(func() {
+		e.seriesCache.clear()
+		e.clearDistStartTimes()
+	})
 
 	for i := range e.shards {
 		e.shards[i] = newShard(opts.Efficiency.ShardBufferSize)
@@ -725,6 +733,7 @@ func (e *Exporter) Run() error {
 		// gets sent eventually.
 		go func(ctx context.Context, b *batch) {
 			if !opts.Disable {
+				e.checkDistributionStartTimes(b)
 				b.send(ctx, sendFunc)
 			}
 			// We could only trigger if we didn't fully empty shards in this batch.
@@ -788,6 +797,58 @@ func (e *Exporter) close() {
 		_ = e.logger.Log("msg", "error closing metric client", "err", err)
 	}
 	e.metricClient = nil
+}
+
+func (e *Exporter) clearDistStartTimes() {
+	e.distStartTimesMtx.Lock()
+	defer e.distStartTimesMtx.Unlock()
+	for k := range e.distStartTimes {
+		delete(e.distStartTimes, k)
+	}
+}
+
+func (e *Exporter) checkDistributionStartTimes(b *batch) {
+	e.distStartTimesMtx.Lock()
+	defer e.distStartTimesMtx.Unlock()
+
+	for _, l := range b.m {
+		for _, s := range l {
+			if s == nil || s.Metric == nil || s.Resource == nil || len(s.Points) == 0 || s.Points[0] == nil || s.Points[0].Interval == nil || s.Points[0].Value == nil {
+				continue
+			}
+			dist := s.Points[0].Value.GetDistributionValue()
+			if dist == nil {
+				continue
+			}
+			if s.Points[0].Interval.StartTime == nil {
+				level.Warn(e.logger).Log("no start time?", "metric", s.Metric)
+				continue
+			}
+			curStartTime := s.Points[0].Interval.StartTime.AsTime()
+			h := hashSeries(s)
+			if prevStartTime, ok := e.distStartTimes[h]; ok {
+				if curStartTime.Before(prevStartTime) {
+					var endTimeStr string
+					if et := s.Points[0].Interval.GetEndTime(); et != nil {
+						endTimeStr = et.AsTime().String()
+					}
+					level.Warn(e.logger).Log(
+						"msg", "distribution start timestamp overlap detected (suddenly older timestamp is sent)",
+						"metric_type", s.Metric.GetType(),
+						"metric_labels", fmt.Sprintf("%v", s.Metric.GetLabels()),
+						"resource_type", s.Resource.GetType(),
+						"resource_labels", fmt.Sprintf("%v", s.Resource.GetLabels()),
+						"prev_start_time", prevStartTime.String(),
+						"cur_start_time", curStartTime.String(),
+						"end_time", endTimeStr,
+						"diff", prevStartTime.Sub(curStartTime).String(),
+						"distribution_value", fmt.Sprintf("%v", dist),
+					)
+				}
+			}
+			e.distStartTimes[h] = curStartTime
+		}
+	}
 }
 
 // CtxKey is a dedicated type for keys of context-embedded values propagated
@@ -1005,8 +1066,8 @@ func (b *batch) empty() bool {
 // send the accumulated samples to their respective projects. It returns once all
 // requests have completed and notifies the pending shards.
 func (b *batch) send(
-		ctx context.Context,
-		sendOne func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error,
+	ctx context.Context,
+	sendOne func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error,
 ) {
 	// Set timeout so slow requests in the batch do not block overall progress indefinitely.
 	sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -1079,8 +1140,8 @@ func (m *Matchers) Equals(other Matchers) bool {
 	return slices.EqualFunc(*m, other, func(msel, osel labels.Selector) bool {
 		return slices.EqualFunc(msel, osel, func(matcher, otherMatcher *labels.Matcher) bool {
 			return matcher.Type == otherMatcher.Type &&
-					matcher.Name == otherMatcher.Name &&
-					matcher.Value == otherMatcher.Value
+				matcher.Name == otherMatcher.Name &&
+				matcher.Value == otherMatcher.Value
 		})
 	})
 }

@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
@@ -155,6 +156,17 @@ func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels
 				return nil, tailSamples, err
 			}
 			if v != nil {
+				if b.series != nil && b.series.logger != nil {
+					level.Info(b.series.logger).Log(
+						"msg", "built distribution",
+						"metric", entry.metadata.Metric,
+						"lset", entry.lset.String(),
+						"reset_timestamp", resetTimestamp,
+						"reset_time", getTimestamp(resetTimestamp).AsTime().String(),
+						"ts", getTimestamp(sample.T).AsTime().String(),
+						"distribution_value", fmt.Sprintf("%v", v),
+					)
+				}
 				value = &monitoring_pb.TypedValue{
 					Value: &monitoring_pb.TypedValue_DistributionValue{DistributionValue: v},
 				}

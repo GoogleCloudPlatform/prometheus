@@ -15,6 +15,7 @@
 package export
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -38,6 +39,8 @@ import (
 	"github.com/prometheus/prometheus/tsdb/record"
 	"github.com/stretchr/testify/require"
 	monitoredres_pb "google.golang.org/genproto/googleapis/api/monitoredres"
+	distribution_pb "google.golang.org/genproto/googleapis/api/distribution"
+	metric_pb "google.golang.org/genproto/googleapis/api/metric"
 	timestamp_pb "google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
@@ -875,4 +878,74 @@ func TestMatchers_Equals(t *testing.T) {
 	require.NoError(t, diff6.Set(`{bar="x",name="foo"}`))
 	require.False(t, m.Equals(diff6))
 	require.False(t, diff6.Equals(m))
+}
+
+func TestCheckDistributionStartTimes(t *testing.T) {
+	buf := &bytes.Buffer{}
+	logger := log.NewJSONLogger(buf)
+
+	e := &Exporter{
+		logger:         logger,
+		distStartTimes: make(map[uint64]time.Time),
+	}
+
+	t1 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	t2 := t1.Add(10 * time.Minute)
+	t0 := t1.Add(-10 * time.Minute)
+
+	makeDistSeries := func(startTime, endTime time.Time) *monitoring_pb.TimeSeries {
+		return &monitoring_pb.TimeSeries{
+			Resource: &monitoredres_pb.MonitoredResource{
+				Type: "gke_container",
+				Labels: map[string]string{
+					"project_id": "test-project",
+				},
+			},
+			Metric: &metric_pb.Metric{
+				Type: "prometheus.googleapis.com/test_histogram/histogram",
+				Labels: map[string]string{
+					"foo": "bar",
+				},
+			},
+			Points: []*monitoring_pb.Point{
+				{
+					Interval: &monitoring_pb.TimeInterval{
+						StartTime: timestamp_pb.New(startTime),
+						EndTime:   timestamp_pb.New(endTime),
+					},
+					Value: &monitoring_pb.TypedValue{
+						Value: &monitoring_pb.TypedValue_DistributionValue{
+							DistributionValue: &distribution_pb.Distribution{
+								Count: 10,
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	b1 := newBatch(logger, 10, 100)
+	b1.add(makeDistSeries(t1, t2))
+	e.checkDistributionStartTimes(b1)
+	require.Empty(t, buf.String())
+
+	// Sending exact same start timestamp (normal cumulative increase over time) should not log warning.
+	b2 := newBatch(logger, 10, 100)
+	b2.add(makeDistSeries(t1, t2.Add(5*time.Minute)))
+	e.checkDistributionStartTimes(b2)
+	require.Empty(t, buf.String())
+
+	// Sending a newer start timestamp (target restart) should not log warning.
+	b3 := newBatch(logger, 10, 100)
+	b3.add(makeDistSeries(t2, t2.Add(5*time.Minute)))
+	e.checkDistributionStartTimes(b3)
+	require.Empty(t, buf.String())
+
+	// Suddenly sending an older start timestamp (overlap) MUST log warning.
+	b4 := newBatch(logger, 10, 100)
+	b4.add(makeDistSeries(t0, t2.Add(10*time.Minute)))
+	e.checkDistributionStartTimes(b4)
+	require.Contains(t, buf.String(), "distribution start timestamp overlap detected")
+	require.Contains(t, buf.String(), "prometheus.googleapis.com/test_histogram/histogram")
 }
