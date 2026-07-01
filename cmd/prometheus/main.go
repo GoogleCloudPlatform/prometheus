@@ -40,6 +40,7 @@ import (
 	"github.com/alecthomas/units"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
+	"github.com/go-logr/logr"
 	"github.com/grafana/regexp"
 	"github.com/mwitkow/go-conntrack"
 	"github.com/oklog/run"
@@ -664,8 +665,10 @@ func main() {
 	// Above level 6, the k8s client would log bearer tokens in clear-text.
 	klog.ClampLevel(6)
 	klog.SetLogger(log.With(logger, "component", "k8s_client_runtime"))
-	klogv2.ClampLevel(6)
-	klogv2.SetLogger(log.With(logger, "component", "k8s_client_runtime"))
+	klogv2.SetLogger(logr.New(&klogGokitSink{
+		logger:   log.With(logger, "component", "k8s_client_runtime"),
+		maxLevel: 6,
+	}))
 
 	modeAppName := "Prometheus Server"
 	mode := "server"
@@ -1896,4 +1899,32 @@ func deleteStorageData(agentMode bool, dataPath string) error {
 		}
 	}
 	return nil
+}
+
+type klogGokitSink struct {
+	logger   log.Logger
+	maxLevel int
+}
+
+func (s *klogGokitSink) Init(info logr.RuntimeInfo) {}
+func (s *klogGokitSink) Enabled(level int) bool { return level <= s.maxLevel }
+func (s *klogGokitSink) Info(level int, msg string, keysAndValues ...any) {
+	if level > s.maxLevel {
+		return
+	}
+	kvs := append([]any{"level", "info", "msg", msg}, keysAndValues...)
+	_ = s.logger.Log(kvs...)
+}
+func (s *klogGokitSink) Error(err error, msg string, keysAndValues ...any) {
+	kvs := append([]any{"level", "error", "msg", msg, "err", err}, keysAndValues...)
+	_ = s.logger.Log(kvs...)
+}
+func (s *klogGokitSink) WithValues(keysAndValues ...any) logr.LogSink {
+	return &klogGokitSink{
+		logger:   log.With(s.logger, keysAndValues...),
+		maxLevel: s.maxLevel,
+	}
+}
+func (s *klogGokitSink) WithName(name string) logr.LogSink {
+	return s
 }
