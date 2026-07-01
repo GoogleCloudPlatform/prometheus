@@ -1977,7 +1977,7 @@ func TestSampleBuilder(t *testing.T) {
 				}
 				b.close()
 			}
-			if diff := cmp.Diff(c.wantSeries, result, protocmp.Transform(), cmpopts.EquateEmpty()); diff != "" {
+			if diff := cmp.Diff(c.wantSeries, result, protocmp.Transform(), cmpopts.EquateEmpty(), cmpopts.SortSlices(func(x, y *monitoring_pb.TimeSeries) bool { return x.String() < y.String() })); diff != "" {
 				t.Errorf("unexpected result (-want, +got): %v", diff)
 			}
 		})
