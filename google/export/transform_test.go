@@ -1813,7 +1813,7 @@ func TestSampleBuilder(t *testing.T) {
 					},
 					Metric: &metric_pb.Metric{
 						Type:   "prometheus.googleapis.com/metric1/histogram",
-						Labels: map[string]string{"a": "c"}, // TODO: This currently returns: map[string]string{"a": "b"} because of the histogram theft bug in Kong.
+						Labels: map[string]string{"a": "c"},
 					},
 					Description: "metric1 help text",
 					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
@@ -1905,7 +1905,7 @@ func TestSampleBuilder(t *testing.T) {
 					},
 					Metric: &metric_pb.Metric{
 						Type:   "prometheus.googleapis.com/metric1/histogram",
-						Labels: map[string]string{"a": "c"}, // TODO: This currently returns: map[string]string{"a": "b"} because of the histogram theft bug in Kong.
+						Labels: map[string]string{"a": "c"},
 					},
 					Description: "metric1 help text",
 					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
