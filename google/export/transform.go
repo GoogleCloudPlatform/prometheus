@@ -70,16 +70,16 @@ func discardExemplarIncIfExists(series storage.SeriesRef, exemplars map[storage.
 }
 
 type sampleBuilder struct {
-	series  *seriesCache
-	dists   map[uint64]*distribution
-	results []hashedSeries
+	series         *seriesCache
+	dists          map[uint64]*distribution
+	histResultsBuf []hashedSeries
 }
 
 func newSampleBuilder(c *seriesCache) *sampleBuilder {
 	return &sampleBuilder{
-		series:  c,
-		dists:   make(map[uint64]*distribution, 128),
-		results: make([]hashedSeries, 0, 4),
+		series:         c,
+		dists:          make(map[uint64]*distribution, 128),
+		histResultsBuf: make([]hashedSeries, 0, 4),
 	}
 }
 
@@ -135,6 +135,8 @@ func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels
 	}
 	if c := entry.protos.cumulative; c.proto != nil {
 		if entry.metadata.Type == model.MetricTypeHistogram {
+			// The moment we see a histogram we build all histogram series for a given metric family.
+			// This is to ensure we guard ourselves from sources that interleave histogram series e.g. https://github.com/Kong/kong/issues/14925.
 			var histSeries []hashedSeries
 			var err error
 			histSeries, tailSamples, err = b.buildDistributions(
@@ -487,7 +489,7 @@ Loop:
 		return nil, samples[1:], errors.New("no sample consumed for histogram")
 	}
 
-	b.results = b.results[:0]
+	b.histResultsBuf = b.histResultsBuf[:0]
 	for _, dist := range b.dists {
 		if dist.complete() {
 			dp, err := dist.build(dist.lset)
@@ -506,11 +508,11 @@ Loop:
 						Value: &monitoring_pb.TypedValue_DistributionValue{DistributionValue: dp},
 					},
 				}}
-				b.results = append(b.results, hashedSeries{hash: dist.hash, proto: &ts})
+				b.histResultsBuf = append(b.histResultsBuf, hashedSeries{hash: dist.hash, proto: &ts})
 			}
 		}
 	}
-	return b.results, samples[consumed:], nil
+	return b.histResultsBuf, samples[consumed:], nil
 }
 
 func buildExemplars(exemplars []record.RefExemplar) []*distribution_pb.Distribution_Exemplar {
