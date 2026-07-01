@@ -132,20 +132,11 @@ func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels
 		result = append(result, hashedSeries{hash: g.hash, proto: &ts})
 	}
 	if c := entry.protos.cumulative; c.proto != nil {
-		var (
-			value          *monitoring_pb.TypedValue
-			resetTimestamp int64
-		)
 		if entry.metadata.Type == model.MetricTypeHistogram {
-			// Consume a set of series as a single distribution sample.
-
-			// We pass in the original lset for matching since Prometheus's target label must
-			// be the same as well.
-			var v *distribution_pb.Distribution
+			var histSeries []hashedSeries
 			var err error
-			v, resetTimestamp, tailSamples, err = b.buildDistribution(
+			histSeries, tailSamples, err = b.buildHistograms(
 				entry.metadata.Metric,
-				entry.lset,
 				samples,
 				exemplars,
 				externalLabels,
@@ -154,13 +145,13 @@ func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels
 			if err != nil {
 				return nil, tailSamples, err
 			}
-			if v != nil {
-				value = &monitoring_pb.TypedValue{
-					Value: &monitoring_pb.TypedValue_DistributionValue{DistributionValue: v},
-				}
-			}
+			result = append(result, histSeries...)
 		} else {
 			// A regular counter series.
+			var (
+				value          *monitoring_pb.TypedValue
+				resetTimestamp int64
+			)
 			var v float64
 			resetTimestamp, v, ok = b.series.getResetAdjusted(storage.SeriesRef(sample.Ref), sample.T, sample.V)
 			if ok {
@@ -169,23 +160,22 @@ func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels
 				}
 				discardExemplarIncIfExists(storage.SeriesRef(sample.Ref), exemplars, "counters-unsupported")
 			}
-		}
-		// We may not have produced a value if:
-		//
-		//   1. It was the first sample of a cumulative and we only initialized  the reset timestamp with it.
-		//   2. We could not observe all necessary series to build a full distribution sample.
-		if value != nil {
-			//nolint:govet
-			ts := *c.proto
+			// We may not have produced a value if:
+			//
+			//   1. It was the first sample of a cumulative and we only initialized  the reset timestamp with it.
+			if value != nil {
+				//nolint:govet
+				ts := *c.proto
 
-			ts.Points = []*monitoring_pb.Point{{
-				Interval: &monitoring_pb.TimeInterval{
-					StartTime: getTimestamp(resetTimestamp),
-					EndTime:   getTimestamp(sample.T),
-				},
-				Value: value,
-			}}
-			result = append(result, hashedSeries{hash: c.hash, proto: &ts})
+				ts.Points = []*monitoring_pb.Point{{
+					Interval: &monitoring_pb.TimeInterval{
+						StartTime: getTimestamp(resetTimestamp),
+						EndTime:   getTimestamp(sample.T),
+					},
+					Value: value,
+				}}
+				result = append(result, hashedSeries{hash: c.hash, proto: &ts})
+			}
 		}
 	}
 	return result, tailSamples, nil
@@ -230,6 +220,10 @@ type distribution struct {
 	hasSum, hasCount, hasInfBucket bool
 	// Whether to not emit a sample.
 	skip bool
+
+	hash  uint64
+	proto *monitoring_pb.TimeSeries
+	lset  labels.Labels
 }
 
 // TODO: create a unit test that makes sure distribution objects
@@ -242,6 +236,9 @@ func (d *distribution) reset() {
 	d.timestamp, d.resetTimestamp = 0, 0
 	d.skip = false
 	d.exemplars = d.exemplars[:0]
+	d.hash = 0
+	d.proto = nil
+	d.lset = labels.EmptyLabels()
 }
 
 func (d *distribution) inputSampleCount() (c int) {
@@ -379,24 +376,30 @@ func isHistogramSeries(metric, name string) bool {
 	return s == metricSuffixBucket || s == metricSuffixSum || s == metricSuffixCount
 }
 
-// buildDistribution consumes series from the input slice and populates the histogram cache with it.
-// It returns when a series is consumed which completes a full distribution.
-// Once all series for a single distribution have been observed, it returns it.
-// It returns the reset timestamp along with the distribution and the remaining samples.
-func (b *sampleBuilder) buildDistribution(
+// buildHistograms consumes series from the input slice and populates the histogram cache with it.
+// It consumes all series for the histogram metric in the batch, and returns all completed distributions.
+func (b *sampleBuilder) buildHistograms(
 	metric string,
-	_ labels.Labels,
 	samples []record.RefSample,
 	exemplars map[storage.SeriesRef]record.RefExemplar,
 	externalLabels labels.Labels,
 	metadata MetadataFunc,
-) (*distribution_pb.Distribution, int64, []record.RefSample, error) {
+) ([]hashedSeries, []record.RefSample, error) {
 	// The Prometheus/OpenMetrics exposition format does not require all histogram series for a single distribution
 	// to be grouped together. But it does require that all series for a histogram metric in general are grouped
 	// together and that buckets for a single histogram are specified in order.
-	// Thus, we build a cache and conclude a histogram complete once we've seen it's _sum series and its +Inf bucket
-	// series. We return for the first histogram where this condition is fulfilled.
+	// Thus, we build a cache and conclude a histogram complete once we've seen its _sum series and its +Inf bucket
+	// series. We consume all contiguous samples for the metric and return all completed histogram series.
 	consumed := 0
+	touched := make([]uint64, 0, 4)
+	defer func() {
+		for _, hash := range touched {
+			if dist, ok := b.dists[hash]; ok {
+				delete(b.dists, hash)
+				putDistribution(dist)
+			}
+		}
+	}()
 Loop:
 	for _, s := range samples {
 		e, ok := b.series.get(s, externalLabels, metadata)
@@ -419,7 +422,11 @@ Loop:
 		if !ok {
 			dist = getDistribution()
 			dist.timestamp = s.T
+			dist.hash = e.protos.cumulative.hash
+			dist.proto = e.protos.cumulative.proto
+			dist.lset = e.lset
 			b.dists[e.protos.cumulative.hash] = dist
+			touched = append(touched, e.protos.cumulative.hash)
 		}
 		// If there are diverging timestamps within a single batch, the histogram is not valid.
 		if s.T != dist.timestamp {
@@ -475,23 +482,41 @@ Loop:
 		default:
 			break Loop
 		}
-
-		if !dist.complete() {
-			continue
-		}
-		dp, err := dist.build(e.lset)
-		if err != nil {
-			return nil, 0, samples[consumed:], err
-		}
-		return dp, dist.resetTimestamp, samples[consumed:], nil
 	}
 	if consumed == 0 {
 		prometheusSamplesDiscarded.WithLabelValues("zero-histogram-samples-processed").Inc()
 		discardExemplarIncIfExists(storage.SeriesRef(samples[0].Ref), exemplars, "zero-histogram-samples-processed")
-		return nil, 0, samples[1:], errors.New("no sample consumed for histogram")
+		return nil, samples[1:], errors.New("no sample consumed for histogram")
 	}
-	// Batch ended without completing a further distribution
-	return nil, 0, samples[consumed:], nil
+
+	var result []hashedSeries
+	for _, hash := range touched {
+		dist := b.dists[hash]
+		if dist == nil {
+			continue
+		}
+		if dist.complete() {
+			dp, err := dist.build(dist.lset)
+			if err != nil {
+				return nil, samples[consumed:], err
+			}
+			if dp != nil && dist.proto != nil {
+				//nolint:govet
+				ts := *dist.proto
+				ts.Points = []*monitoring_pb.Point{{
+					Interval: &monitoring_pb.TimeInterval{
+						StartTime: getTimestamp(dist.resetTimestamp),
+						EndTime:   getTimestamp(dist.timestamp),
+					},
+					Value: &monitoring_pb.TypedValue{
+						Value: &monitoring_pb.TypedValue_DistributionValue{DistributionValue: dp},
+					},
+				}}
+				result = append(result, hashedSeries{hash: dist.hash, proto: &ts})
+			}
+		}
+	}
+	return result, samples[consumed:], nil
 }
 
 func buildExemplars(exemplars []record.RefExemplar) []*distribution_pb.Distribution_Exemplar {
