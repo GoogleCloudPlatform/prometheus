@@ -1622,6 +1622,320 @@ func TestSampleBuilder(t *testing.T) {
 				},
 			},
 		},
+		{
+			// This represents basic https://github.com/Kong/kong/issues/14925 case. Incidentally it works.
+			doc: "ungrouped (interleaved) histograms samples",
+			metadata: testMetadataFunc(metricMetadataMap{
+				"metric1": {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
+			}),
+			series: seriesMap{
+				1: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_bucket", "le", "2.5"),
+				2: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_bucket", "le", "+Inf"),
+				3: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_count"),
+				4: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_sum"),
+
+				5: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_bucket", "le", "2.5"),
+				6: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_bucket", "le", "+Inf"),
+				7: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_count"),
+				8: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_sum"),
+			},
+			samples: [][]record.RefSample{
+				{
+					// _bucket
+					{Ref: 1, T: 1000, V: 10}, // hist1, 2.5
+					{Ref: 5, T: 1000, V: 10}, // hist2, 2.5
+					{Ref: 2, T: 1000, V: 10}, // hist1, inf
+					{Ref: 6, T: 1000, V: 10}, // hist2, inf
+					// _count
+					{Ref: 3, T: 1000, V: 10}, // hist1, count
+					{Ref: 7, T: 1000, V: 10}, // hist2, count
+					// _sum
+					{Ref: 4, T: 1000, V: 100}, // hist1, sum
+					{Ref: 8, T: 1000, V: 100}, // hist2, sum
+				},
+				{
+					// _bucket
+					{Ref: 1, T: 2000, V: 10}, // hist1, 2.5
+					{Ref: 5, T: 2000, V: 10}, // hist2, 2.5
+					{Ref: 2, T: 2000, V: 13}, // hist1, inf
+					{Ref: 6, T: 2000, V: 14}, // hist2, inf
+					// _count
+					{Ref: 3, T: 2000, V: 13}, // hist1, count
+					{Ref: 7, T: 2000, V: 14}, // hist2, count
+					// _sum
+					{Ref: 4, T: 2000, V: 115}, // hist1, sum
+					{Ref: 8, T: 2000, V: 120}, // hist2, sum
+				},
+			},
+			wantSeries: []*monitoring_pb.TimeSeries{
+				{
+					Resource: &monitoredres_pb.MonitoredResource{
+						Type: "prometheus_target",
+						Labels: map[string]string{
+							"project_id": "example-project",
+							"location":   "europe",
+							"cluster":    "foo-cluster",
+							"namespace":  "",
+							"job":        "job1",
+							"instance":   "instance1",
+						},
+					},
+					Metric: &metric_pb.Metric{
+						Type:   "prometheus.googleapis.com/metric1/histogram",
+						Labels: map[string]string{"a": "b"},
+					},
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
+					Points: []*monitoring_pb.Point{{
+						Interval: &monitoring_pb.TimeInterval{
+							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
+							EndTime:   &timestamp_pb.Timestamp{Seconds: 2},
+						},
+						Value: &monitoring_pb.TypedValue{
+							Value: &monitoring_pb.TypedValue_DistributionValue{
+								DistributionValue: &distribution_pb.Distribution{
+									Count:                 3,
+									Mean:                  5,
+									SumOfSquaredDeviation: 18.75,
+									BucketOptions: &distribution_pb.Distribution_BucketOptions{
+										Options: &distribution_pb.Distribution_BucketOptions_ExplicitBuckets{
+											ExplicitBuckets: &distribution_pb.Distribution_BucketOptions_Explicit{
+												Bounds: []float64{2.5},
+											},
+										},
+									},
+									BucketCounts: []int64{0, 3},
+								},
+							},
+						},
+					}},
+				},
+				{
+					Resource: &monitoredres_pb.MonitoredResource{
+						Type: "prometheus_target",
+						Labels: map[string]string{
+							"project_id": "example-project",
+							"location":   "europe",
+							"cluster":    "foo-cluster",
+							"namespace":  "",
+							"job":        "job1",
+							"instance":   "instance1",
+						},
+					},
+					Metric: &metric_pb.Metric{
+						Type:   "prometheus.googleapis.com/metric1/histogram",
+						Labels: map[string]string{"a": "c"},
+					},
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
+					Points: []*monitoring_pb.Point{{
+						Interval: &monitoring_pb.TimeInterval{
+							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
+							EndTime:   &timestamp_pb.Timestamp{Seconds: 2},
+						},
+						Value: &monitoring_pb.TypedValue{
+							Value: &monitoring_pb.TypedValue_DistributionValue{
+								DistributionValue: &distribution_pb.Distribution{
+									Count:                 4,
+									Mean:                  5,
+									SumOfSquaredDeviation: 25,
+									BucketOptions: &distribution_pb.Distribution_BucketOptions{
+										Options: &distribution_pb.Distribution_BucketOptions_ExplicitBuckets{
+											ExplicitBuckets: &distribution_pb.Distribution_BucketOptions_Explicit{
+												Bounds: []float64{2.5},
+											},
+										},
+									},
+									BucketCounts: []int64{0, 4},
+								},
+							},
+						},
+					}},
+				},
+			},
+		},
+		{
+			doc: "ungrouped (interleaved) histograms samples with the first group being incomplete",
+			metadata: testMetadataFunc(metricMetadataMap{
+				"metric1": {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
+			}),
+			series: seriesMap{
+				// Incomplete histogram (missing +Inf bucket).
+				1: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_bucket", "le", "2.5"),
+				2: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_count"),
+				3: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_sum"),
+				// Complete histogram.
+				4: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_bucket", "le", "2.5"),
+				5: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_bucket", "le", "+Inf"),
+				6: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_count"),
+				7: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_sum"),
+			},
+			samples: [][]record.RefSample{
+				{
+					// _bucket
+					{Ref: 1, T: 1000, V: 10}, // hist1 (incomplete), 2.5
+					{Ref: 4, T: 1000, V: 10}, // hist2 (complete), 2.5
+					{Ref: 5, T: 1000, V: 10}, // hist2 (complete), inf
+					// _count
+					{Ref: 2, T: 1000, V: 10}, // hist1 (incomplete), count
+					{Ref: 6, T: 1000, V: 10}, // hist2 (complete), count
+					// _sum
+					{Ref: 3, T: 1000, V: 100}, // hist1 (incomplete), sum
+					{Ref: 7, T: 1000, V: 100}, // hist2 (complete), sum
+				},
+				{
+					// _bucket
+					{Ref: 1, T: 2000, V: 10}, // hist1 (incomplete), 2.5
+					{Ref: 4, T: 2000, V: 10}, // hist2 (complete), 2.5
+					{Ref: 5, T: 2000, V: 13}, // hist2 (complete), inf
+					// _count
+					{Ref: 2, T: 2000, V: 15}, // hist1 (incomplete), count
+					{Ref: 6, T: 2000, V: 13}, // hist2 (complete), count
+					// _sum
+					{Ref: 3, T: 2000, V: 110}, // hist1 (incomplete), sum
+					{Ref: 7, T: 2000, V: 115}, // hist2 (complete), sum
+				},
+			},
+			wantSeries: []*monitoring_pb.TimeSeries{
+				{
+					Resource: &monitoredres_pb.MonitoredResource{
+						Type: "prometheus_target",
+						Labels: map[string]string{
+							"project_id": "example-project",
+							"location":   "europe",
+							"cluster":    "foo-cluster",
+							"namespace":  "",
+							"job":        "job1",
+							"instance":   "instance1",
+						},
+					},
+					Metric: &metric_pb.Metric{
+						Type:   "prometheus.googleapis.com/metric1/histogram",
+						Labels: map[string]string{"a": "c"}, // TODO: This currently returns: map[string]string{"a": "b"} because of the histogram theft bug in Kong.
+					},
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
+					Points: []*monitoring_pb.Point{{
+						Interval: &monitoring_pb.TimeInterval{
+							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
+							EndTime:   &timestamp_pb.Timestamp{Seconds: 2},
+						},
+						Value: &monitoring_pb.TypedValue{
+							Value: &monitoring_pb.TypedValue_DistributionValue{
+								DistributionValue: &distribution_pb.Distribution{
+									Count:                 3,
+									Mean:                  5,
+									SumOfSquaredDeviation: 18.75,
+									BucketOptions: &distribution_pb.Distribution_BucketOptions{
+										Options: &distribution_pb.Distribution_BucketOptions_ExplicitBuckets{
+											ExplicitBuckets: &distribution_pb.Distribution_BucketOptions_Explicit{
+												Bounds: []float64{2.5},
+											},
+										},
+									},
+									BucketCounts: []int64{0, 3},
+								},
+							},
+						},
+					}},
+				},
+			},
+		},
+		{
+			doc: "ungrouped (interleaved) histograms samples with the first group being skipped (second scrape is adding one more bucket)",
+			metadata: testMetadataFunc(metricMetadataMap{
+				"metric1": {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
+			}),
+			series: seriesMap{
+				1: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_bucket", "le", "2.5"),
+				2: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_bucket", "le", "+Inf"),
+				3: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_count"),
+				4: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_sum"),
+				// Added in second scrape:
+				5: labels.FromStrings("job", "job1", "instance", "instance1", "a", "b", "__name__", "metric1_bucket", "le", "1.0"),
+				6: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_bucket", "le", "2.5"),
+				7: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_bucket", "le", "+Inf"),
+				8: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_count"),
+				9: labels.FromStrings("job", "job1", "instance", "instance1", "a", "c", "__name__", "metric1_sum"),
+			},
+			samples: [][]record.RefSample{
+				{
+					// _bucket
+					{Ref: 1, T: 1000, V: 10}, // hist1, 2.5
+					{Ref: 6, T: 1000, V: 10}, // hist2, 2.5
+					{Ref: 2, T: 1000, V: 10}, // hist1, inf
+					{Ref: 7, T: 1000, V: 10}, // hist2, inf
+					// _count
+					{Ref: 3, T: 1000, V: 10}, // hist1, count
+					{Ref: 8, T: 1000, V: 10}, // hist2, count
+					// _sum
+					{Ref: 4, T: 1000, V: 100}, // hist1, sum
+					{Ref: 9, T: 1000, V: 100}, // hist2, sum
+				},
+				{
+					// _bucket
+					{Ref: 5, T: 2000, V: 2},  // hist1, 1.0 (new bucket in second scrape)
+					{Ref: 1, T: 2000, V: 10}, // hist1, 2.5
+					{Ref: 6, T: 2000, V: 10}, // hist2, 2.5
+					{Ref: 2, T: 2000, V: 15}, // hist1, inf
+					{Ref: 7, T: 2000, V: 13}, // hist2, inf
+					// _count
+					{Ref: 3, T: 2000, V: 15}, // hist1, count
+					{Ref: 8, T: 2000, V: 13}, // hist2, count
+					// _sum
+					{Ref: 4, T: 2000, V: 110}, // hist1, sum
+					{Ref: 9, T: 2000, V: 115}, // hist2, sum
+				},
+			},
+			wantSeries: []*monitoring_pb.TimeSeries{
+				{
+					Resource: &monitoredres_pb.MonitoredResource{
+						Type: "prometheus_target",
+						Labels: map[string]string{
+							"project_id": "example-project",
+							"location":   "europe",
+							"cluster":    "foo-cluster",
+							"namespace":  "",
+							"job":        "job1",
+							"instance":   "instance1",
+						},
+					},
+					Metric: &metric_pb.Metric{
+						Type:   "prometheus.googleapis.com/metric1/histogram",
+						Labels: map[string]string{"a": "c"}, // TODO: This currently returns: map[string]string{"a": "b"} because of the histogram theft bug in Kong.
+					},
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
+					Points: []*monitoring_pb.Point{{
+						Interval: &monitoring_pb.TimeInterval{
+							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
+							EndTime:   &timestamp_pb.Timestamp{Seconds: 2},
+						},
+						Value: &monitoring_pb.TypedValue{
+							Value: &monitoring_pb.TypedValue_DistributionValue{
+								DistributionValue: &distribution_pb.Distribution{
+									Count:                 3,
+									Mean:                  5,
+									SumOfSquaredDeviation: 18.75,
+									BucketOptions: &distribution_pb.Distribution_BucketOptions{
+										Options: &distribution_pb.Distribution_BucketOptions_ExplicitBuckets{
+											ExplicitBuckets: &distribution_pb.Distribution_BucketOptions_Explicit{
+												Bounds: []float64{2.5},
+											},
+										},
+									},
+									BucketCounts: []int64{0, 3},
+								},
+							},
+						},
+					}},
+				},
+			},
+		},
 	}
 
 	for i, c := range cases {
