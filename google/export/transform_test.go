@@ -1623,7 +1623,7 @@ func TestSampleBuilder(t *testing.T) {
 			},
 		},
 		{
-			// This represents basic https://github.com/Kong/kong/issues/14925 case. Incidentally it works.
+			// Regression test against b/516519320.
 			doc: "ungrouped (interleaved) histograms samples",
 			metadata: testMetadataFunc(metricMetadataMap{
 				"metric1": {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
@@ -1757,6 +1757,7 @@ func TestSampleBuilder(t *testing.T) {
 			},
 		},
 		{
+			// Regression test against b/516519320.
 			doc: "ungrouped (interleaved) histograms samples with the first group being incomplete",
 			metadata: testMetadataFunc(metricMetadataMap{
 				"metric1": {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
@@ -1845,6 +1846,7 @@ func TestSampleBuilder(t *testing.T) {
 			},
 		},
 		{
+			// Regression test against b/516519320.
 			doc: "ungrouped (interleaved) histograms samples with the first group being skipped (second scrape is adding one more bucket)",
 			metadata: testMetadataFunc(metricMetadataMap{
 				"metric1": {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
