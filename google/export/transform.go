@@ -72,7 +72,6 @@ func discardExemplarIncIfExists(series storage.SeriesRef, exemplars map[storage.
 type sampleBuilder struct {
 	series  *seriesCache
 	dists   map[uint64]*distribution
-	touched []uint64 // Preserves deterministic series insertion order.
 	results []hashedSeries
 }
 
@@ -80,7 +79,6 @@ func newSampleBuilder(c *seriesCache) *sampleBuilder {
 	return &sampleBuilder{
 		series:  c,
 		dists:   make(map[uint64]*distribution, 128),
-		touched: make([]uint64, 0, 4),
 		results: make([]hashedSeries, 0, 4),
 	}
 }
@@ -395,7 +393,6 @@ func (b *sampleBuilder) buildDistributions(
 	// We build a cache and conclude a histogram complete once we've seen its _sum series and its +Inf bucket
 	// series. We consume all contiguous samples for the metric and return all completed histogram series.
 	consumed := 0
-	b.touched = b.touched[:0]
 	defer func() {
 		for _, dist := range b.dists {
 			putDistribution(dist)
@@ -428,7 +425,6 @@ Loop:
 			dist.proto = e.protos.cumulative.proto
 			dist.lset = e.lset
 			b.dists[e.protos.cumulative.hash] = dist
-			b.touched = append(b.touched, e.protos.cumulative.hash)
 		}
 		// If there are diverging timestamps within a single batch, the histogram is not valid.
 		if s.T != dist.timestamp {
@@ -492,11 +488,7 @@ Loop:
 	}
 
 	b.results = b.results[:0]
-	for _, hash := range b.touched {
-		dist := b.dists[hash]
-		if dist == nil {
-			continue
-		}
+	for _, dist := range b.dists {
 		if dist.complete() {
 			dp, err := dist.build(dist.lset)
 			if err != nil {
