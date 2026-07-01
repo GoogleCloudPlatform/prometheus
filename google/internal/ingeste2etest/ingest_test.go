@@ -161,21 +161,12 @@ func (p PrometheusForkGCMBackend) StartAndWaitReady(t testing.TB, env e2e.Enviro
 	return prom
 }
 
+// Reproducing interleaved metrics.
 func generateKongMetrics(scrapeNum int) string {
 	var buf bytes.Buffer
 	buf.WriteString("# HELP kong_kong_latency_ms Latency added by Kong and enabled plugins for each service/route in Kong\n")
 	buf.WriteString("# TYPE kong_kong_latency_ms histogram\n")
 
-	//// a. healthy histogram has 5 buckets sum and count and slowly increases every scrape
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"10\"} %d\n", scrapeNum*2)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"20\"} %d\n", scrapeNum*5)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"50\"} %d\n", scrapeNum*8)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"100\"} %d\n", scrapeNum*10)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"+Inf\"} %d\n", scrapeNum*10)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"healthy\"} %d\n", scrapeNum*310)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"healthy\"} %d\n", scrapeNum*10)
-
-	// b. add_bucket is slowly increasing. On 3rd scrape new bucket arrives
 	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"10\"} %d\n", scrapeNum*2)
 	if scrapeNum >= 3 {
 		fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"20\"} %d\n", scrapeNum*5)
@@ -183,35 +174,75 @@ func generateKongMetrics(scrapeNum int) string {
 	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"50\"} %d\n", scrapeNum*8)
 	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"100\"} %d\n", scrapeNum*10)
 	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"+Inf\"} %d\n", scrapeNum*10)
-	fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"add_bucket\"} %d\n", scrapeNum*310)
-	fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"add_bucket\"} %d\n", scrapeNum*10)
-
-	// c. counter-missing is slowly increasing. On 3rd scrape counter is decreasing value. On 4rd scrape going up. On 5rd scrape removed.
 	mDec := scrapeNum
 	if scrapeNum >= 3 {
 		mDec = scrapeNum - 2
 	}
-	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"10\"} %d\n", scrapeNum*2)
-	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"20\"} %d\n", scrapeNum*5)
-	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"50\"} %d\n", scrapeNum*8)
-	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"100\"} %d\n", scrapeNum*10)
-	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"+Inf\"} %d\n", scrapeNum*10)
-	fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"counter-missing\"} %d\n", scrapeNum*310)
+	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"10\"} %d\n", scrapeNum*12)
+	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"20\"} %d\n", scrapeNum*15)
+	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"50\"} %d\n", scrapeNum*18)
+	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"100\"} %d\n", scrapeNum*110)
+	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"+Inf\"} %d\n", scrapeNum*110)
+	fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"add_bucket\"} %d\n", scrapeNum*10)
 	if scrapeNum < 6 {
-		fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"counter-missing\"} %d\n", mDec*10)
+		fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"counter-missing\"} %d\n", mDec*110)
 	}
-	//
-	//// d. counter-decreasing is slowly increasing. On 3rd scrape counter is decreasing value, then slowly increasing
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"10\"} %d\n", scrapeNum*2)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"20\"} %d\n", scrapeNum*5)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"50\"} %d\n", scrapeNum*8)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"100\"} %d\n", scrapeNum*10)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"+Inf\"} %d\n", scrapeNum*10)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"counter-decreasing\"} %d\n", scrapeNum*310)
-	//fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"counter-decreasing\"} %d\n", mDec*10)
-
+	fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"add_bucket\"} %d\n", scrapeNum*310)
+	fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"counter-missing\"} %d\n", scrapeNum*1310)
 	return buf.String()
 }
+
+//func generateKongMetrics(scrapeNum int) string {
+//	var buf bytes.Buffer
+//	buf.WriteString("# HELP kong_kong_latency_ms Latency added by Kong and enabled plugins for each service/route in Kong\n")
+//	buf.WriteString("# TYPE kong_kong_latency_ms histogram\n")
+//
+//	//// a. healthy histogram has 5 buckets sum and count and slowly increases every scrape
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"10\"} %d\n", scrapeNum*2)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"20\"} %d\n", scrapeNum*5)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"50\"} %d\n", scrapeNum*8)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"100\"} %d\n", scrapeNum*10)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"healthy\",le=\"+Inf\"} %d\n", scrapeNum*10)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"healthy\"} %d\n", scrapeNum*310)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"healthy\"} %d\n", scrapeNum*10)
+//
+//	// b. add_bucket is slowly increasing. On 3rd scrape new bucket arrives
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"10\"} %d\n", scrapeNum*2)
+//	if scrapeNum >= 3 {
+//		fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"20\"} %d\n", scrapeNum*5)
+//	}
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"50\"} %d\n", scrapeNum*8)
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"100\"} %d\n", scrapeNum*10)
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"add_bucket\",le=\"+Inf\"} %d\n", scrapeNum*10)
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"add_bucket\"} %d\n", scrapeNum*310)
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"add_bucket\"} %d\n", scrapeNum*10)
+//
+//	// c. counter-missing is slowly increasing. On 3rd scrape counter is decreasing value. On 4rd scrape going up. On 5rd scrape removed.
+//	mDec := scrapeNum
+//	if scrapeNum >= 3 {
+//		mDec = scrapeNum - 2
+//	}
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"10\"} %d\n", scrapeNum*2)
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"20\"} %d\n", scrapeNum*5)
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"50\"} %d\n", scrapeNum*8)
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"100\"} %d\n", scrapeNum*10)
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-missing\",le=\"+Inf\"} %d\n", scrapeNum*10)
+//	fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"counter-missing\"} %d\n", scrapeNum*310)
+//	if scrapeNum < 6 {
+//		fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"counter-missing\"} %d\n", mDec*10)
+//	}
+//	//
+//	//// d. counter-decreasing is slowly increasing. On 3rd scrape counter is decreasing value, then slowly increasing
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"10\"} %d\n", scrapeNum*2)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"20\"} %d\n", scrapeNum*5)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"50\"} %d\n", scrapeNum*8)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"100\"} %d\n", scrapeNum*10)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_bucket{case=\"counter-decreasing\",le=\"+Inf\"} %d\n", scrapeNum*10)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_sum{case=\"counter-decreasing\"} %d\n", scrapeNum*310)
+//	//fmt.Fprintf(&buf, "kong_kong_latency_ms_count{case=\"counter-decreasing\"} %d\n", mDec*10)
+//
+//	return buf.String()
+//}
 
 func TestIngestE2E_ProxyKong(t *testing.T) {
 	env, err := e2e.NewDockerEnvironment("ingest-e2e")
@@ -265,8 +296,7 @@ func TestIngestE2E_ProxyKong(t *testing.T) {
 
 	backend := PrometheusForkGCMBackend{
 		Name:  "gmp-prom-ingest",
-		Image: "gcr.io/gke-release/prometheus-engine/prometheus@sha256:68038912eddca33347de1e85ffae8b785832303875957bd58d579a52ce8b6f93",
-		//"us-east1-docker.pkg.dev/gpe-test-1/public/prometheus-engine:v2.53.5-gmp.5-dev1", //
+		Image: "us-east1-docker.pkg.dev/gpe-test-1/public/prometheus-engine:v2.53.5-gmp.5-dev1", //"gcr.io/gke-release/prometheus-engine/prometheus:v2.45.3-gmp.18-gke.2", // "gcr.io/gke-release/prometheus-engine/prometheus@sha256:68038912eddca33347de1e85ffae8b785832303875957bd58d579a52ce8b6f93",
 		GCMSA: gcmServiceAccountOrFail(t),
 	}
 

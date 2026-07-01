@@ -159,17 +159,21 @@ func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels
 				if b.series != nil && b.series.logger != nil {
 					level.Info(b.series.logger).Log(
 						"msg", "built distribution",
+						"hash", entry.protos.cumulative.hash,
 						"metric", entry.metadata.Metric,
 						"lset", entry.lset.String(),
-						"reset_timestamp", resetTimestamp,
 						"reset_time", getTimestamp(resetTimestamp).AsTime().String(),
 						"ts", getTimestamp(sample.T).AsTime().String(),
 						"distribution_value", fmt.Sprintf("%v", v),
+						"proto.Metric", c.proto.Metric.String(),
 					)
 				}
 				value = &monitoring_pb.TypedValue{
 					Value: &monitoring_pb.TypedValue_DistributionValue{DistributionValue: v},
 				}
+			} else {
+				level.Info(b.series.logger).Log(
+					"msg", "no value for distribution", "lset", entry.lset.String())
 			}
 		} else {
 			// A regular counter series.
@@ -282,6 +286,27 @@ func (d *distribution) Less(i, j int) bool {
 func (d *distribution) Swap(i, j int) {
 	d.bounds[i], d.bounds[j] = d.bounds[j], d.bounds[i]
 	d.values[i], d.values[j] = d.values[j], d.values[i]
+}
+
+func (d *distribution) String() string {
+	if d == nil {
+		return "nil"
+	}
+	var buckets []string
+	for i, b := range d.bounds {
+		var v int64
+		if i < len(d.values) {
+			v = d.values[i]
+		}
+		buckets = append(buckets, fmt.Sprintf("%v:%d", b, v))
+	}
+	if len(d.values) > len(d.bounds) {
+		for i := len(d.bounds); i < len(d.values); i++ {
+			buckets = append(buckets, fmt.Sprintf("?:%d", d.values[i]))
+		}
+	}
+	return fmt.Sprintf("distribution{buckets:[%s], sum:%v(has:%t), count:%v(has:%t), hasInfBucket:%t, skip:%t, ts:%s, rt:%s, exemplars:%d}",
+		strings.Join(buckets, " "), d.sum, d.hasSum, d.count, d.hasCount, d.hasInfBucket, d.skip, getTimestamp(d.timestamp).AsTime().String(), getTimestamp(d.resetTimestamp).AsTime().String(), len(d.exemplars))
 }
 
 func (d *distribution) build(lset labels.Labels) (*distribution_pb.Distribution, error) {
@@ -397,7 +422,7 @@ func isHistogramSeries(metric, name string) bool {
 // It returns the reset timestamp along with the distribution and the remaining samples.
 func (b *sampleBuilder) buildDistribution(
 	metric string,
-	_ labels.Labels,
+	lset labels.Labels,
 	samples []record.RefSample,
 	exemplars map[storage.SeriesRef]record.RefExemplar,
 	externalLabels labels.Labels,
@@ -442,6 +467,9 @@ Loop:
 		}
 
 		rt, v, ok := b.series.getResetAdjusted(storage.SeriesRef(s.Ref), s.T, s.V)
+
+		level.Info(b.series.logger).Log("msg", "getResetAdjusted", "lset", e.lset, "rt", getTimestamp(rt).AsTime().String(), "t", getTimestamp(s.T).AsTime().String(), "v", v, "origV", s.V)
+
 		// If a series appeared for the first time, we won't get a valid reset timestamp yet.
 		// This may happen if the histogram is entirely new or if new series appeared through bucket changes.
 		// We skip the entire distribution sample in this case.
@@ -486,6 +514,10 @@ Loop:
 
 		default:
 			break Loop
+		}
+
+		if b.series != nil && b.series.logger != nil {
+			level.Info(b.series.logger).Log("msg", "distribution states", "dists", fmt.Sprintf("%v", b.dists))
 		}
 
 		if !dist.complete() {
