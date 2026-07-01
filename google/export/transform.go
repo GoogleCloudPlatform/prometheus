@@ -409,6 +409,7 @@ Loop:
 		name := e.lset.Get(labels.MetricName)
 		// Abort if the series is not for the intended histogram metric. All series for it must be grouped
 		// together so we can rely on no further relevant series are in the batch.
+		// TODO(bwplotka): We can't rely on this in Kong https://github.com/Kong/kong/issues/14925.
 		if !isHistogramSeries(metric, name) {
 			break
 		}
@@ -477,6 +478,9 @@ Loop:
 		}
 
 		if !dist.complete() {
+			// TODO(bwplotka): If we see a new series or incomplete histogram A and then histogram B is interleaved and complete,
+			// this method will return histogram B. Caller will assume it's histogram B. This causes out of order and generally
+			// corrupted histograms.
 			continue
 		}
 		dp, err := dist.build(e.lset)
