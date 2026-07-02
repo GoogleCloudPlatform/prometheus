@@ -290,6 +290,7 @@ func (c *seriesCache) getResetAdjusted(ref storage.SeriesRef, t int64, v float64
 	if !hasReset {
 		e.resetTimestamp = t
 		e.resetValue = v
+		e.lastValue = v
 		// If we just initialized the reset timestamp, this sample should be skipped.
 		// We don't know the window over which the current cumulative value was built up over.
 		// The next sample for will be considered from this point onwards.

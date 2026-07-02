@@ -1934,6 +1934,107 @@ func TestSampleBuilder(t *testing.T) {
 				},
 			},
 		},
+		{
+			doc: "histogram with bucket suddenly decreasing without count decreasing (causes negative bucket count)",
+			metadata: testMetadataFunc(metricMetadataMap{
+				"metric1": {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
+			}),
+			series: seriesMap{
+				1: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_bucket", "le", "2.5"),
+				2: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_bucket", "le", "+Inf"),
+				3: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_count"),
+				4: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_sum"),
+			},
+			samples: [][]record.RefSample{
+				{
+					{Ref: 1, T: 1000, V: 10},
+					{Ref: 2, T: 1000, V: 10},
+					{Ref: 3, T: 1000, V: 10},
+					{Ref: 4, T: 1000, V: 100},
+				},
+				{
+					// Bucket 2.5 suddenly decreases from 10 to 8 without count/inf decreasing.
+					{Ref: 1, T: 2000, V: 8},
+					{Ref: 2, T: 2000, V: 11},
+					{Ref: 3, T: 2000, V: 11},
+					{Ref: 4, T: 2000, V: 110},
+				},
+			},
+			wantFailOnLastSample: true,
+		},
+		{
+			doc: "histogram with sum suddenly decreasing without count decreasing (desynchronized reset timestamp)",
+			metadata: testMetadataFunc(metricMetadataMap{
+				"metric1": {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
+			}),
+			series: seriesMap{
+				1: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_bucket", "le", "2.5"),
+				2: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_bucket", "le", "+Inf"),
+				3: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_count"),
+				4: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_sum"),
+			},
+			samples: [][]record.RefSample{
+				{
+					{Ref: 1, T: 1000, V: 10},
+					{Ref: 2, T: 1000, V: 10},
+					{Ref: 3, T: 1000, V: 10},
+					{Ref: 4, T: 1000, V: 100},
+				},
+				{
+					// Sum suddenly decreases from 100 to 40 without count decreasing.
+					{Ref: 1, T: 2000, V: 12},
+					{Ref: 2, T: 2000, V: 12},
+					{Ref: 3, T: 2000, V: 12},
+					{Ref: 4, T: 2000, V: 40},
+				},
+			},
+			wantSeries: []*monitoring_pb.TimeSeries{
+				{
+					Resource: &monitoredres_pb.MonitoredResource{
+						Type: "prometheus_target",
+						Labels: map[string]string{
+							"project_id": "example-project",
+							"location":   "europe",
+							"cluster":    "foo-cluster",
+							"namespace":  "",
+							"job":        "job1",
+							"instance":   "instance1",
+						},
+					},
+					Metric: &metric_pb.Metric{
+						Type:   "prometheus.googleapis.com/metric1/histogram",
+						Labels: map[string]string{},
+					},
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
+					ValueType:   metric_pb.MetricDescriptor_DISTRIBUTION,
+					Points: []*monitoring_pb.Point{{
+						Interval: &monitoring_pb.TimeInterval{
+							// Notice: interval start time comes from count (1s), while sum was reset at 1.999s!
+							StartTime: &timestamp_pb.Timestamp{Seconds: 1},
+							EndTime:   &timestamp_pb.Timestamp{Seconds: 2},
+						},
+						Value: &monitoring_pb.TypedValue{
+							Value: &monitoring_pb.TypedValue_DistributionValue{
+								DistributionValue: &distribution_pb.Distribution{
+									Count:                 2,
+									Mean:                  20, // Sum (40-0=40) / Count (12-10=2) = 20
+									SumOfSquaredDeviation: 703.125,
+									BucketOptions: &distribution_pb.Distribution_BucketOptions{
+										Options: &distribution_pb.Distribution_BucketOptions_ExplicitBuckets{
+											ExplicitBuckets: &distribution_pb.Distribution_BucketOptions_Explicit{
+												Bounds: []float64{2.5},
+											},
+										},
+									},
+									BucketCounts: []int64{2, 0},
+								},
+							},
+						},
+					}},
+				},
+			},
+		},
 	}
 
 	for i, c := range cases {
