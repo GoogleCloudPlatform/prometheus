@@ -93,23 +93,23 @@ func benchHistograms(b *testing.B, numSeries int, grouped bool) {
 		return sMap[ref]
 	}
 
+	sb := newSampleBuilder(cache)
+	defer sb.close()
+
 	// Run initial batch to populate reset timestamps.
-	b0 := newSampleBuilder(cache)
 	batch := batches[0]
 	for len(batch) > 0 {
-		_, tail, err := b0.next(metadata, externalLabels, batch, nil)
+		_, tail, err := sb.next(metadata, externalLabels, batch, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
 		batch = tail
 	}
-	b0.close()
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		sb := newSampleBuilder(cache)
 		batch := batches[1]
 		for len(batch) > 0 {
 			_, tail, err := sb.next(metadata, externalLabels, batch, nil)
@@ -118,7 +118,6 @@ func benchHistograms(b *testing.B, numSeries int, grouped bool) {
 			}
 			batch = tail
 		}
-		sb.close()
 	}
 }
 
