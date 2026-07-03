@@ -106,10 +106,9 @@ func benchHistograms(b *testing.B, numSeries int, grouped bool) {
 		batch = tail
 	}
 
-	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		batch := batches[1]
 		for len(batch) > 0 {
 			_, tail, err := sb.next(metadata, externalLabels, batch, nil)
