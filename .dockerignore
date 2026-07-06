@@ -8,3 +8,6 @@ data/
 !.build/linux-ppc64le/
 !.build/linux-riscv64/
 !.build/linux-s390x/
+
+/vendor
+

@@ -1,0 +1,79 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: Presubmit
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go & npm tests
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/prometheus/golang-builder:1.26-base
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      with:
+        persist-credentials: false
+    - uses: prometheus/promci-setup@3e5cd31b34b8ae19efa8f071c5e3cdb44884a7f8 # v0.2.1
+      with:
+        enable_npm: true
+    - run: make install-goyacc build test
+  build-image-amd64:
+    name: Ensure Google image builds (amd64)
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+    - name: Ensure forked image is buildable
+      run: |
+        # Our dockerfile expects npm vendoring, yet this is done during the mirror stage.
+        # Do it on demand here, similar to how it will be added in our mirror job.
+        GOWORK=off go mod vendor
+        find . -name "package.json" -not -path "*/node_modules/*" -execdir npm install \;
+        
+        docker run --rm --privileged multiarch/qemu-user-static --reset --credential yes --persistent yes
+        docker buildx create --name multi-arch-builder --use
+        docker buildx build -f Dockerfile.google -t gmp-prometheus:amd64 . --platform linux/amd64 --target=app --load
+    - name: Save Docker image as a tar archive
+      run: docker save gmp-prometheus:amd64 -o image.tar
+    - name: Upload Docker image artifact for the next tests
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: gmp-prometheus-amd64
+        path: image.tar
+  test-export-gcm:
+    name: GCM e2e tests
+    runs-on: ubuntu-latest
+    # This job now depends on build-image-amd64 and will run only after it succeeds.
+    needs: build-image-amd64
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+    - name: Download Docker image artifact
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: gmp-prometheus-amd64
+    - name: Load Docker image
+      run: docker load -i image.tar
+    - name: Run export GCM tests
+      env:
+        GCM_SECRET: ${{ secrets.GCM_SECRET }}
+        GMP_PROMETHEUS_IMAGE: "gmp-prometheus:amd64"
+      run: make -C ./google/internal/promqle2etest test
+
