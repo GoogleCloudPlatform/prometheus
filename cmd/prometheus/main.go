@@ -36,23 +36,30 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"testing"
 	"time"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/alecthomas/units"
+	gokitlog "github.com/go-kit/log"
 	"github.com/grafana/regexp"
 	"github.com/mwitkow/go-conntrack"
 	"github.com/oklog/run"
+	"github.com/oklog/ulid"
 	remoteapi "github.com/prometheus/client_golang/exp/api/remote"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	versioncollector "github.com/prometheus/client_golang/prometheus/collectors/version"
+	common_config "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/promslog"
 	promslogflag "github.com/prometheus/common/promslog/flag"
 	"github.com/prometheus/common/version"
 	toolkit_web "github.com/prometheus/exporter-toolkit/web"
+	"github.com/prometheus/prometheus/google/export"
+	gcm_export "github.com/prometheus/prometheus/google/export/setup"
+	"github.com/prometheus/prometheus/google/secrets"
 	"go.uber.org/atomic"
 	"go.uber.org/automaxprocs/maxprocs"
 	"k8s.io/client-go/rest"
@@ -126,6 +133,36 @@ func (klogv1Writer) Write(p []byte) (n int, err error) {
 	}
 
 	return len(p), nil
+}
+
+type slogToGoKitAdapter struct {
+	logger *slog.Logger
+}
+
+func (a slogToGoKitAdapter) Log(keyvals ...any) error {
+	var msg string
+	var args []any
+	for i := 0; i < len(keyvals); i += 2 {
+		key, _ := keyvals[i].(string)
+		var val any
+		if i+1 < len(keyvals) {
+			val = keyvals[i+1]
+		}
+		if key == "msg" {
+			msg, _ = val.(string)
+		} else {
+			args = append(args, key, val)
+		}
+	}
+	a.logger.Info(msg, args...)
+	return nil
+}
+
+func toGoKitLog(logger *slog.Logger) gokitlog.Logger {
+	if logger == nil {
+		return gokitlog.NewNopLogger()
+	}
+	return slogToGoKitAdapter{logger: logger}
 }
 
 var (
@@ -216,6 +253,7 @@ type flagConfig struct {
 	enablePerStepStats       bool
 	enableConcurrentRuleEval bool
 	useStartTimestamps       bool
+	enableKubeSecretProvider bool
 
 	prometheusURL   string
 	corsRegexString string
@@ -312,6 +350,11 @@ func (c *flagConfig) setFeatureListOptions(logger *slog.Logger) error {
 			case "promql-binop-fill-modifiers":
 				c.parserOpts.EnableBinopFillModifiers = true
 				logger.Info("Experimental PromQL binary operator fill modifiers enabled.")
+			case "google-kubernetes-secret-provider":
+				c.enableKubeSecretProvider = true
+				logger.Info("Experimental (Google) Kubernetes secret provider enabled.")
+			case "":
+				continue
 			case "old-ui":
 				c.web.UseOldUI = true
 				logger.Info("Serving previous version of the Prometheus web UI.")
@@ -642,8 +685,11 @@ func main() {
 	a.Flag("agent", "Run Prometheus in 'Agent mode'.").BoolVar(&agentMode)
 
 	promslogflag.AddFlags(a, &cfg.promslogConfig)
-
 	a.Flag("write-documentation", "Generate command line documentation. Internal use.").Hidden().Action(func(*kingpin.ParseContext) error {
+		// Set defaults to empty to ensure this command is deterministic.
+		a.GetFlag("export.label.project-id").Default("")
+		a.GetFlag("export.label.cluster").Default("")
+		a.GetFlag("export.label.location").Default("")
 		if err := documentcli.GenerateMarkdown(a.Model(), os.Stdout); err != nil {
 			os.Exit(1)
 			return err
@@ -652,7 +698,26 @@ func main() {
 		return nil
 	}).Bool()
 
-	_, err := a.Parse(os.Args[1:])
+	// GMP fork flags.
+	var deleteDataOnStart bool
+	a.Flag("gmp.storage.delete-data-on-start", "[GMP fork experimental flag] If true, all the storage related data (e.g. blocks, lock file, WAL, head chunks) in the --storage.tsdb.path or --storage.agent.path (depending on the mode) will be deleted, right before opening the DB. As a result, all previously collected samples will be uncoverably dropped. Use it in setups where the availability is more important than the persistence between restarts, as replaying data can take time and resources. This flag is especially useful on Kubernetes with ephemeral storage (for consistency between pod vs container restart), remote write use cases that prioritize live data and when you want to auto-recover from the OOM crashloops without changing memory limits for Prometheus (see https://github.com/prometheus/prometheus/issues/13939).").
+		Default("false").BoolVar(&deleteDataOnStart)
+
+	opts := gcm_export.Opts{
+		ExporterOpts: export.ExporterOpts{
+			UserAgentProduct: fmt.Sprintf("prometheus/%s", version.Version),
+			Disable:          testing.Testing(),
+		},
+	}
+	opts.SetupFlags(a)
+
+	extraArgs, err := gcm_export.ExtraArgs()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fmt.Errorf("Error parsing commandline arguments: %w", err))
+		a.Usage(os.Args[1:])
+		os.Exit(2)
+	}
+	_, err = a.Parse(append(os.Args[1:], extraArgs...))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing command line arguments: %s\n", err)
 		a.Usage(os.Args[1:])
@@ -709,6 +774,16 @@ func main() {
 	localStoragePath := cfg.serverStoragePath
 	if agentMode {
 		localStoragePath = cfg.agentStoragePath
+	}
+
+	// NOTE(bwplotka): This opt-in functionality exists in our fork, relevant
+	// discussion in the upstream is here: https://github.com/prometheus/prometheus/issues/13939
+	if deleteDataOnStart {
+		logger.Info("The --gmp.storage.delete-data-on-start flag was set, deleting relevant storage files in the storage path", "path", localStoragePath)
+		if err := deleteStorageData(agentMode, localStoragePath); err != nil {
+			fmt.Fprintln(os.Stderr, fmt.Errorf("failed to delete storage data as requested: %w", err))
+			os.Exit(1)
+		}
 	}
 
 	cfg.web.ExternalURL, err = computeExternalURL(cfg.prometheusURL, cfg.web.ListenAddresses[0])
@@ -921,6 +996,7 @@ func main() {
 	var (
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
+		ctxSecrets        = context.Background()
 
 		notifierManager = notifier.NewManager(&cfg.notifier, cfgFile.GlobalConfig.MetricNameValidationScheme, logger.With("component", "notifier"))
 
@@ -969,6 +1045,21 @@ func main() {
 	if err != nil {
 		logger.Error("failed to create a scrape manager", "err", err)
 		os.Exit(1)
+	}
+
+	var secretManager *secrets.Manager
+	if cfg.enableKubeSecretProvider {
+		manager := secrets.NewManager(
+			ctxSecrets,
+			prometheus.DefaultRegisterer,
+			secrets.ProviderOptions{
+				Logger: gokitlog.With(toGoKitLog(logger), "component", "secret manager"),
+			},
+		)
+		secretManager = &manager
+		defer secretManager.Close(prometheus.DefaultRegisterer)
+
+		cfg.scrape.HTTPClientOptions = append(cfg.scrape.HTTPClientOptions, common_config.WithSecretManager(secretManager))
 	}
 
 	var (
@@ -1145,6 +1236,20 @@ func main() {
 				return discoveryManagerScrape.ApplyConfig(c)
 			},
 		}, {
+			name: "secret",
+			reloader: func(cfg *config.Config) error {
+				if secretManager == nil {
+					if len(cfg.SecretConfigs) > 0 {
+						return errors.New("secret providers are disabled")
+					}
+					return nil
+				}
+				kConfig := secrets.WatchSPConfig{
+					ClientConfig: cfg.ClientConfig,
+				}
+				return secretManager.ApplyConfig(&kConfig, cfg.SecretConfigs)
+			},
+		}, {
 			name:     "notify",
 			reloader: notifierManager.ApplyConfig,
 		}, {
@@ -1185,6 +1290,12 @@ func main() {
 		}, {
 			name:     "tracing",
 			reloader: tracingManager.ApplyConfig,
+		}, {
+			name: "gcm_export",
+			reloader: func(cfg *config.Config) error {
+				// Call in closure to not call Global() before it's initialized below.
+				return gcm_export.Global().ApplyConfig(cfg)
+			},
 		},
 	}
 
@@ -1247,6 +1358,29 @@ func main() {
 				close(cancel)
 				webHandler.SetReady(web.Stopping)
 				notifs.AddNotification(notifications.ShuttingDown)
+			},
+		)
+	}
+	{
+		exporterLogger := gokitlog.With(toGoKitLog(logger), "component", "gcm_exporter")
+		ctx, cancel := context.WithCancel(context.Background())
+		exporter, err := opts.NewExporter(ctx, exporterLogger, prometheus.DefaultRegisterer)
+		if err != nil {
+			logger.Error("Unable to init Google Cloud Monitoring exporter", "err", err)
+			os.Exit(2)
+		}
+
+		if err := gcm_export.SetGlobal(exporter); err != nil {
+			logger.Error("Unable to set Google Cloud Monitoring exporter", "err", err)
+			os.Exit(2)
+		}
+
+		g.Add(
+			func() error {
+				return gcm_export.Global().Run()
+			},
+			func(err error) {
+				cancel()
 			},
 		)
 	}
@@ -1733,7 +1867,7 @@ func updateGoGC(conf *config.Config, logger *slog.Logger) {
 
 func startsOrEndsWithQuote(s string) bool {
 	return strings.HasPrefix(s, "\"") || strings.HasPrefix(s, "'") ||
-		strings.HasSuffix(s, "\"") || strings.HasSuffix(s, "'")
+			strings.HasSuffix(s, "\"") || strings.HasSuffix(s, "'")
 }
 
 // compileCORSRegexString compiles given string and adds anchors.
@@ -2246,4 +2380,39 @@ func exludeBlocksPendingUpload(logger *slog.Logger, uploadMetaPath string) tsdb.
 
 		return !slices.Contains(uploadMeta.Uploaded, meta.ULID.String())
 	}
+}
+
+func deleteStorageData(agentMode bool, dataPath string) error {
+	if agentMode {
+		for _, f := range []string{"wal", "lock"} {
+			if err := os.RemoveAll(filepath.Join(dataPath, f)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	files, err := os.ReadDir(dataPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("can't read dir %v: %w", dataPath, err)
+	}
+	for _, f := range files {
+		switch f.Name() {
+		case "wal", "lock", "chunks_head":
+			if err := os.RemoveAll(filepath.Join(dataPath, f.Name())); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := ulid.Parse(f.Name()); err == nil {
+			// It's a TSDB block, remove.
+			if err := os.RemoveAll(filepath.Join(dataPath, f.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

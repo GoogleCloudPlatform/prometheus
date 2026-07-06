@@ -29,6 +29,8 @@ import (
 	stdatomic "sync/atomic" //nolint:depguard
 	"time"
 
+	gcm_exportsetup "github.com/prometheus/prometheus/google/export/setup"
+
 	"github.com/oklog/ulid/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/promslog"
@@ -339,6 +341,14 @@ func NewHead(r prometheus.Registerer, l *slog.Logger, wal, wbl *wlog.WL, opts *H
 		return nil, err
 	}
 	h.metrics = newHeadMetrics(h, r)
+
+	gcm_exportsetup.Global().SetLabelsByIDFunc(func(id storage.SeriesRef) labels.Labels {
+		series := h.series.getByID(chunks.HeadSeriesRef(id))
+		if series == nil {
+			return labels.EmptyLabels()
+		}
+		return series.lset
+	})
 
 	return h, nil
 }

@@ -5423,6 +5423,7 @@ func testScrapeReportLimit(t *testing.T, appV2 bool) {
 }
 
 func TestScrapeUTF8(t *testing.T) {
+	t.Skip("Google: UTF-8 validation is not supported in our fork.")
 	foreachAppendable(t, func(t *testing.T, appV2 bool) {
 		testScrapeUTF8(t, appV2)
 	})
@@ -7691,5 +7692,65 @@ func TestScrapeOffsetDistribution(t *testing.T) {
 			}
 			require.Greater(t, len(uniqueTimes), 2, "Expected targets to be scraped at staggered offsets rather than simultaneously at scrape index %d", i)
 		}
+	})
+}
+
+func TestScrapeDefaultFallbackScrapeProtocol(t *testing.T) {
+	foreachAppendable(t, func(t *testing.T, appV2 bool) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Unsupported Content-Type triggers the fallback.
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write([]byte("metric_a 1\n"))
+		}))
+		defer server.Close()
+
+		s := teststorage.New(t)
+		reg := prometheus.NewRegistry()
+
+		sa := selectAppendable(s, appV2)
+		logger := promslog.New(&promslog.Config{})
+		mng, err := NewManager(&Options{DiscoveryReloadInterval: model.Duration(10 * time.Millisecond)}, logger, nil, sa.V1(), sa.V2(), reg)
+		require.NoError(t, err)
+
+		configStr := fmt.Sprintf(`
+global:
+  scrape_interval: 50ms
+  scrape_timeout: 25ms
+scrape_configs:
+  - job_name: test
+    static_configs:
+      - targets: [%s]
+`, strings.ReplaceAll(server.URL, "http://", ""))
+
+		cfg, err := config.Load(configStr, promslog.NewNopLogger())
+		require.NoError(t, err)
+		require.NoError(t, mng.ApplyConfig(cfg))
+
+		tsets := make(chan map[string][]*targetgroup.Group)
+		go func() {
+			require.NoError(t, mng.Run(tsets))
+		}()
+		defer mng.Stop()
+
+		// Get the static targets and apply them to the scrape manager.
+		require.Len(t, cfg.ScrapeConfigs, 1)
+		scrapeCfg := cfg.ScrapeConfigs[0]
+		require.Len(t, scrapeCfg.ServiceDiscoveryConfigs, 1)
+		staticDiscovery, ok := scrapeCfg.ServiceDiscoveryConfigs[0].(discovery.StaticConfig)
+		require.True(t, ok)
+		tsets <- map[string][]*targetgroup.Group{"test": staticDiscovery}
+
+		// Wait for the scrape loop to scrape the target and succeed.
+		require.Eventually(t, func() bool {
+			q, err := s.Querier(0, math.MaxInt64)
+			require.NoError(t, err)
+			defer q.Close()
+			seriesS := q.Select(context.Background(), false, nil, labels.MustNewMatcher(labels.MatchEqual, "__name__", "metric_a"))
+			countSeries := 0
+			for seriesS.Next() {
+				countSeries++
+			}
+			return countSeries > 0
+		}, 5*time.Second, 100*time.Millisecond)
 	})
 }
