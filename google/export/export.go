@@ -461,6 +461,9 @@ const (
 // changed and applied to the exporter, potentially recreating the metric client.
 // NOTE: Runtime configuration will not override disable/disableAuth options from flags.
 func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
+	if e.opts.Disable {
+		return nil
+	}
 	// Note: We don't expect the NopExporter to call this. Only the config reloader calls it.
 	e.mtx.Lock()
 	defer e.mtx.Unlock()
@@ -817,10 +820,10 @@ func MetadataFuncFromContext(ctx context.Context) (MetadataFunc, bool) {
 // MetricMetadata is a copy of MetricMetadata in Prometheus's scrape package.
 // It is copied to break a dependency cycle.
 type MetricMetadata struct {
-	Metric string
-	Type   model.MetricType
-	Help   string
-	Unit   string
+	MetricFamily string
+	Type         model.MetricType
+	Help         string
+	Unit         string
 }
 
 // MetadataFunc gets metadata for a specific metric name.

@@ -33,6 +33,8 @@ import (
 	"github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/otlptranslator"
+	gcm_exportconfig "github.com/prometheus/prometheus/google/config"
+	gcm_secrets "github.com/prometheus/prometheus/google/secrets"
 	"github.com/prometheus/sigv4"
 	"go.yaml.in/yaml/v2"
 
@@ -299,9 +301,15 @@ type Config struct {
 	StorageConfig     StorageConfig   `yaml:"storage,omitempty"`
 	TracingConfig     TracingConfig   `yaml:"tracing,omitempty"`
 
+	// Secret management:
+	gcm_secrets.ClientConfig `yaml:"kubernetes_sp_config,omitempty"`
+	SecretConfigs            []gcm_secrets.SecretConfig `yaml:"kubernetes_secrets,omitempty"`
+
 	RemoteWriteConfigs []*RemoteWriteConfig `yaml:"remote_write,omitempty"`
 	RemoteReadConfigs  []*RemoteReadConfig  `yaml:"remote_read,omitempty"`
 	OTLPConfig         OTLPConfig           `yaml:"otlp,omitempty"`
+
+	GoogleCloud gcm_exportconfig.GoogleCloudConfig `yaml:"google_cloud,omitempty"`
 
 	loaded bool // Certain methods require configuration to use Load validation.
 }

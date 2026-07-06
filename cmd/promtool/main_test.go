@@ -603,6 +603,8 @@ func TestExitCodes(t *testing.T) {
 }
 
 func TestDocumentation(t *testing.T) {
+	t.Skip("google: We don't maintain docs in our fork, so nothing to regenerate and test.")
+
 	if runtime.GOOS == "windows" {
 		t.SkipNow()
 	}

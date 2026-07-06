@@ -25,11 +25,15 @@ import (
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/chunks"
 	"github.com/prometheus/prometheus/tsdb/record"
+
+	gcm_export "github.com/prometheus/prometheus/google/export"
 )
 
 // AppenderV2 implements storage.AppenderV2.
-func (db *DB) AppenderV2(context.Context) storage.AppenderV2 {
-	return db.appenderV2Pool.Get().(storage.AppenderV2)
+func (db *DB) AppenderV2(ctx context.Context) storage.AppenderV2 {
+	a := db.appenderV2Pool.Get().(*appenderV2)
+	a.metadata, _ = gcm_export.MetadataFuncFromContext(ctx)
+	return a
 }
 
 type appenderV2 struct {

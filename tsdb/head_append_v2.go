@@ -18,6 +18,8 @@ import (
 	"errors"
 	"fmt"
 
+	gcm_export "github.com/prometheus/prometheus/google/export"
+
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
@@ -30,8 +32,9 @@ import (
 // initAppenderV2 is a helper to initialize the time bounds of the head
 // upon the first sample it receives.
 type initAppenderV2 struct {
-	app  storage.AppenderV2
-	head *Head
+	app          storage.AppenderV2
+	head         *Head
+	metadataFunc gcm_export.MetadataFunc
 }
 
 var _ storage.GetRef = &initAppenderV2{}
@@ -39,7 +42,7 @@ var _ storage.GetRef = &initAppenderV2{}
 func (a *initAppenderV2) Append(ref storage.SeriesRef, ls labels.Labels, st, t int64, v float64, h *histogram.Histogram, fh *histogram.FloatHistogram, opts storage.AOptions) (storage.SeriesRef, error) {
 	if a.app == nil {
 		a.head.initTime(t)
-		a.app = a.head.appenderV2()
+		a.app = a.head.appenderV2(a.metadataFunc)
 	}
 	return a.app.Append(ref, ls, st, t, v, h, fh, opts)
 }
@@ -68,20 +71,23 @@ func (a *initAppenderV2) Rollback() error {
 }
 
 // AppenderV2 returns a new AppenderV2 on the database.
-func (h *Head) AppenderV2(context.Context) storage.AppenderV2 {
+func (h *Head) AppenderV2(ctx context.Context) storage.AppenderV2 {
 	h.metrics.activeAppenders.Inc()
+
+	metadataFunc, _ := gcm_export.MetadataFuncFromContext(ctx)
 
 	// The head cache might not have a starting point yet. The init appender
 	// picks up the first appended timestamp as the base.
 	if !h.initialized() {
 		return &initAppenderV2{
-			head: h,
+			head:         h,
+			metadataFunc: metadataFunc,
 		}
 	}
-	return h.appenderV2()
+	return h.appenderV2(metadataFunc)
 }
 
-func (h *Head) appenderV2() *headAppenderV2 {
+func (h *Head) appenderV2(metadataFunc gcm_export.MetadataFunc) *headAppenderV2 {
 	minValidTime := h.appendableMinValidTime()
 	appendID, cleanupAppendIDsBelow := h.iso.newAppendID(minValidTime) // Every appender gets an ID that is cleared upon commit/rollback.
 	return &headAppenderV2{
@@ -97,6 +103,7 @@ func (h *Head) appenderV2() *headAppenderV2 {
 			cleanupAppendIDsBelow: cleanupAppendIDsBelow,
 			storeST:               h.opts.EnableSTStorage.Load(),
 			useXOR2:               h.opts.UseXOR2FloatEncoding(),
+			metadataFunc:          metadataFunc,
 		},
 	}
 }

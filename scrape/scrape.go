@@ -37,6 +37,7 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/promslog"
 	"github.com/prometheus/common/version"
+	gcm_export "github.com/prometheus/prometheus/google/export"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -1179,6 +1180,12 @@ func newScrapeLoop(opts scrapeLoopOptions) *scrapeLoop {
 		appenderCtx = ContextWithTarget(appenderCtx, opts.target)
 	}
 
+	// Inject target for propagation to the GCM export pipeline at the storage level.
+	appenderCtx = gcm_export.WithMetadataFunc(appenderCtx, func(metric string) (gcm_export.MetricMetadata, bool) {
+		md, ok := opts.target.GetMetadata(metric)
+		return gcm_export.MetricMetadata(md), ok
+	})
+
 	ctx, cancel := context.WithCancel(opts.sp.ctx)
 	return &scrapeLoop{
 		ctx:         ctx,
@@ -1220,12 +1227,26 @@ func newScrapeLoop(opts scrapeLoopOptions) *scrapeLoop {
 		enableNativeHistogramScraping: opts.target.boolLabel(scrapeNativeHistogramsLabel, opts.sp.config.ScrapeNativeHistogramsEnabled()),
 		alwaysScrapeClassicHist:       opts.target.boolLabel(alwaysScrapeClassicHistogramsLabel, opts.sp.config.AlwaysScrapeClassicHistogramsEnabled()),
 		convertClassicHistToNHCB:      opts.target.boolLabel(convertClassicHistogramsToNHCBLabel, opts.sp.config.ConvertClassicHistogramsToNHCBEnabled()),
-		fallbackScrapeProtocol:        opts.sp.config.ScrapeFallbackProtocol.HeaderMediaType(),
-		enableCompression:             opts.sp.config.EnableCompression,
-		mrc:                           opts.sp.config.MetricRelabelConfigs,
-		reportExtraMetrics:            opts.sp.config.ExtraScrapeMetricsEnabled(),
-		validationScheme:              opts.sp.config.MetricNameValidationScheme,
-
+		// We fallback to PrometheusText0_0_4 if ScrapeFallbackProtocol is empty
+		// to ensure transitional compatibility with older versions of the GMP operator,
+		// until we can guarantee that fallback_scrape_protocol will be populated
+		// in the configuration provided by the operator.
+		// For more details, see the design doc at go/gmp:prom-3.13.
+		fallbackScrapeProtocol: func() string {
+			if opts.sp.config.ScrapeFallbackProtocol == "" {
+				return config.PrometheusText0_0_4.HeaderMediaType()
+			}
+			return opts.sp.config.ScrapeFallbackProtocol.HeaderMediaType()
+		}(),
+		enableCompression:  opts.sp.config.EnableCompression,
+		mrc:                opts.sp.config.MetricRelabelConfigs,
+		reportExtraMetrics: opts.sp.config.ExtraScrapeMetricsEnabled(),
+		// We do not support the UTF-8 metric name validation scheme in the initial versions
+		// of the GMP export pipeline because the downstream Google Cloud Monitoring (GCM)
+		// service requires metric names to adhere to stricter naming conventions.
+		// Enabling UTF-8 validation could cause scrapes to accept metric names that will
+		// fail ingestion in GCM. For more details, see the design doc at go/gmp:prom-3.13.
+		validationScheme: model.LegacyValidation,
 		// scrape.Options.
 		enableSTZeroIngestion: opts.sp.options.EnableStartTimestampZeroIngestion,
 		// parseST was added recently. Before EnableStartTimestampZeroIngestion

@@ -628,7 +628,7 @@ func TestHeadAppenderV2_UncommittedSamplesNotLostOnTruncate(t *testing.T) {
 
 	h.initTime(0)
 
-	app := h.appenderV2()
+	app := h.appenderV2(nil)
 	lset := labels.FromStrings("a", "1")
 	_, err := app.Append(0, lset, 0, 2100, 1, nil, nil, storage.AOptions{})
 	require.NoError(t, err)
@@ -658,7 +658,7 @@ func TestHeadAppenderV2_TestRemoveSeriesAfterRollbackAndTruncate(t *testing.T) {
 
 	h.initTime(0)
 
-	app := h.appenderV2()
+	app := h.appenderV2(nil)
 	lset := labels.FromStrings("a", "1")
 	_, err := app.Append(0, lset, 0, 2100, 1, nil, nil, storage.AOptions{})
 	require.NoError(t, err)
@@ -713,7 +713,7 @@ func TestHeadAppenderV2_ReturnsSortedLabelValues(t *testing.T) {
 
 	h.initTime(0)
 
-	app := h.appenderV2()
+	app := h.appenderV2(nil)
 	for i := 100; i > 0; i-- {
 		for j := range 10 {
 			lset := labels.FromStrings(
@@ -832,7 +832,7 @@ func TestHeadAppenderV2_MemSeriesIsolation(t *testing.T) {
 			if h.MinTime() == math.MaxInt64 {
 				app = &initAppenderV2{head: h}
 			} else {
-				a := h.appenderV2()
+				a := h.appenderV2(nil)
 				a.cleanupAppendIDsBelow = 0
 				app = a
 			}
@@ -864,7 +864,7 @@ func TestHeadAppenderV2_MemSeriesIsolation(t *testing.T) {
 	require.Equal(t, 999, lastValue(hb, 999))
 
 	// Cleanup appendIDs below 500.
-	app := hb.appenderV2()
+	app := hb.appenderV2(nil)
 	app.cleanupAppendIDsBelow = 500
 	_, err := app.Append(0, labels.FromStrings("foo", "bar"), 0, int64(i), float64(i), nil, nil, storage.AOptions{})
 	require.NoError(t, err)
@@ -883,7 +883,7 @@ func TestHeadAppenderV2_MemSeriesIsolation(t *testing.T) {
 
 	// Cleanup appendIDs below 1000, which means the sample buffer is
 	// the only thing with appendIDs.
-	app = hb.appenderV2()
+	app = hb.appenderV2(nil)
 	app.cleanupAppendIDsBelow = 1000
 	_, err = app.Append(0, labels.FromStrings("foo", "bar"), 0, int64(i), float64(i), nil, nil, storage.AOptions{})
 	require.NoError(t, err)
@@ -897,7 +897,7 @@ func TestHeadAppenderV2_MemSeriesIsolation(t *testing.T) {
 
 	i++
 	// Cleanup appendIDs below 1001, but with a rollback.
-	app = hb.appenderV2()
+	app = hb.appenderV2(nil)
 	app.cleanupAppendIDsBelow = 1001
 	_, err = app.Append(0, labels.FromStrings("foo", "bar"), 0, int64(i), float64(i), nil, nil, storage.AOptions{})
 	require.NoError(t, err)
@@ -934,7 +934,7 @@ func TestHeadAppenderV2_MemSeriesIsolation(t *testing.T) {
 
 	// Cleanup appendIDs below 1000, which means the sample buffer is
 	// the only thing with appendIDs.
-	app = hb.appenderV2()
+	app = hb.appenderV2(nil)
 	_, err = app.Append(0, labels.FromStrings("foo", "bar"), 0, int64(i), float64(i), nil, nil, storage.AOptions{})
 	i++
 	require.NoError(t, err)
@@ -947,7 +947,7 @@ func TestHeadAppenderV2_MemSeriesIsolation(t *testing.T) {
 	require.Equal(t, 1001, lastValue(hb, 1003))
 
 	// Cleanup appendIDs below 1002, but with a rollback.
-	app = hb.appenderV2()
+	app = hb.appenderV2(nil)
 	_, err = app.Append(0, labels.FromStrings("foo", "bar"), 0, int64(i), float64(i), nil, nil, storage.AOptions{})
 	require.NoError(t, err)
 	require.NoError(t, app.Rollback())
