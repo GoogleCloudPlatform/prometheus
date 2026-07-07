@@ -56,6 +56,10 @@ var (
 		Name: "gcm_export_samples_exported_total",
 		Help: "Number of samples exported at scrape time.",
 	})
+	samplesBuilt = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gcm_export_samples_built_total",
+		Help: "Number of samples exported at scrape time.",
+	})
 	exemplarsExported = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "gcm_export_exemplars_exported_total",
 		Help: "Number of exemplars exported at scrape time.",
@@ -110,9 +114,9 @@ var (
 		Buckets: []float64{1, 2, 5, 10, 20, 50, 100, 150, 200},
 	})
 	ErrLocationGlobal = errors.New("location must be set to a named Google Cloud " +
-			"region and cannot be set to \"global\". please choose the " +
-			"Google Cloud region that is physically nearest to your cluster. " +
-			"see https://www.cloudinfrastructuremap.com/")
+		"region and cannot be set to \"global\". please choose the " +
+		"Google Cloud region that is physically nearest to your cluster. " +
+		"see https://www.cloudinfrastructuremap.com/")
 )
 
 type metricServiceClient interface {
@@ -393,6 +397,7 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 		reg.MustRegister(
 			prometheusSamplesDiscarded,
 			samplesExported,
+			samplesBuilt,
 			samplesDropped,
 			samplesSent,
 			samplesSendErrors,
@@ -628,6 +633,7 @@ func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample, exemp
 			level.Debug(e.logger).Log("msg", "building sample failed", "err", err)
 			continue
 		}
+		samplesBuilt.Add(float64(len(samples)))
 		for _, s := range samples {
 			// Only enqueue samples for within our HA range.
 			if sampleInRange(s.proto, start, end) {
@@ -1062,8 +1068,8 @@ func logDebugGRPCRequest(logger log.Logger, matchers Matchers, prefix string, re
 // send the accumulated samples to their respective projects. It returns once all
 // requests have completed and notifies the pending shards.
 func (b *batch) send(
-		ctx context.Context,
-		sendOne func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error,
+	ctx context.Context,
+	sendOne func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error,
 ) {
 	// Set timeout so slow requests in the batch do not block overall progress indefinitely.
 	sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -1140,8 +1146,8 @@ func (m *Matchers) Equals(other Matchers) bool {
 	return slices.EqualFunc(*m, other, func(msel, osel labels.Selector) bool {
 		return slices.EqualFunc(msel, osel, func(matcher, otherMatcher *labels.Matcher) bool {
 			return matcher.Type == otherMatcher.Type &&
-					matcher.Name == otherMatcher.Name &&
-					matcher.Value == otherMatcher.Value
+				matcher.Name == otherMatcher.Name &&
+				matcher.Value == otherMatcher.Value
 		})
 	})
 }
