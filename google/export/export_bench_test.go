@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/chunks"
 	"github.com/prometheus/prometheus/tsdb/record"
@@ -159,11 +160,16 @@ func benchExportHistograms(b *testing.B, numHistograms int, numSeriesPerHist int
 	b.ResetTimer()
 	b.ReportAllocs()
 	var t int64 = 2000
+	old := testutil.ToFloat64(samplesBuilt)
 	for b.Loop() {
 		for i := range batches[1] {
 			batches[1][i].T = t
 		}
 		exporter.Export(metadata, batches[1], nil)
+		if diff := testutil.ToFloat64(samplesBuilt) - old; diff != float64(numHistograms*numSeriesPerHist) {
+			b.Fatalf("unexpected number of samples, got %v, expected %v", diff, numHistograms*numSeriesPerHist)
+		}
+		old = testutil.ToFloat64(samplesBuilt)
 		t += 1000
 	}
 }
