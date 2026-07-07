@@ -102,17 +102,13 @@ func setupHistogramBenchDataV2(numHistograms int, numSeriesPerHist int, grouped 
 				batch0 = append(batch0, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef), T: 1000, V: float64(100 * (seriesIdx + 1))})
 				batch1 = append(batch1, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef), T: 2000, V: float64(200 * (seriesIdx + 1))})
 			}
-		}
-		for h := 0; h < numHistograms; h++ {
 			for s := 0; s < numSeriesPerHist; s++ {
 				seriesIdx := h*numSeriesPerHist + s
 				baseRef := storage.SeriesRef(seriesIdx*samplesPerSeries + 1)
 				batch0 = append(batch0, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef + 1), T: 1000, V: float64(10 * (seriesIdx + 1))})
 				batch1 = append(batch1, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef + 1), T: 2000, V: float64(20 * (seriesIdx + 1))})
 			}
-		}
-		for bIdx := range buckets {
-			for h := 0; h < numHistograms; h++ {
+			for bIdx := range buckets {
 				for s := 0; s < numSeriesPerHist; s++ {
 					seriesIdx := h*numSeriesPerHist + s
 					baseRef := storage.SeriesRef(seriesIdx*samplesPerSeries + 1)
