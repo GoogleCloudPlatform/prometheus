@@ -162,8 +162,13 @@ func benchExportHistograms(b *testing.B, numHistograms int, numSeriesPerHist int
 
 	b.ResetTimer()
 	b.ReportAllocs()
+	var t int64 = 2000
 	for b.Loop() {
+		for i := range batches[1] {
+			batches[1][i].T = t
+		}
 		exporter.Export(metadata, batches[1], nil)
+		t += 1000
 	}
 }
 
