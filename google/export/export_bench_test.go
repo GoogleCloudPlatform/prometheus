@@ -82,13 +82,13 @@ func setupHistogramBenchDataV2(numHistograms int, numSeriesPerHist int, grouped 
 				seriesIdx := h*numSeriesPerHist + s
 				baseRef := storage.SeriesRef(seriesIdx*samplesPerSeries + 1)
 				batch0 = append(batch0, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef), T: 1000, V: float64(100 * (seriesIdx + 1))})
-				batch0 = append(batch0, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef+1), T: 1000, V: float64(10 * (seriesIdx + 1))})
+				batch0 = append(batch0, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef + 1), T: 1000, V: float64(10 * (seriesIdx + 1))})
 				for bIdx := range buckets {
 					batch0 = append(batch0, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef + storage.SeriesRef(2+bIdx)), T: 1000, V: float64((bIdx + 1) * (seriesIdx + 1))})
 				}
 
 				batch1 = append(batch1, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef), T: 2000, V: float64(200 * (seriesIdx + 1))})
-				batch1 = append(batch1, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef+1), T: 2000, V: float64(20 * (seriesIdx + 1))})
+				batch1 = append(batch1, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef + 1), T: 2000, V: float64(20 * (seriesIdx + 1))})
 				for bIdx := range buckets {
 					batch1 = append(batch1, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef + storage.SeriesRef(2+bIdx)), T: 2000, V: float64(2 * (bIdx + 1) * (seriesIdx + 1))})
 				}
@@ -107,8 +107,8 @@ func setupHistogramBenchDataV2(numHistograms int, numSeriesPerHist int, grouped 
 			for s := 0; s < numSeriesPerHist; s++ {
 				seriesIdx := h*numSeriesPerHist + s
 				baseRef := storage.SeriesRef(seriesIdx*samplesPerSeries + 1)
-				batch0 = append(batch0, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef+1), T: 1000, V: float64(10 * (seriesIdx + 1))})
-				batch1 = append(batch1, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef+1), T: 2000, V: float64(20 * (seriesIdx + 1))})
+				batch0 = append(batch0, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef + 1), T: 1000, V: float64(10 * (seriesIdx + 1))})
+				batch1 = append(batch1, record.RefSample{Ref: chunks.HeadSeriesRef(baseRef + 1), T: 2000, V: float64(20 * (seriesIdx + 1))})
 			}
 		}
 		for bIdx := range buckets {
@@ -167,6 +167,12 @@ func benchExportHistograms(b *testing.B, numHistograms int, numSeriesPerHist int
 	}
 }
 
+/*
+	export bench=after && go test ./google/export/... \
+		 -run '^$' -bench '^BenchmarkExport_Histograms' \
+		 -benchtime 2s -count 6 -cpu 2 -benchmem -timeout 999m \
+	 | tee ${bench}.txt
+*/
 func BenchmarkExport_Histograms(b *testing.B) {
 	numHistograms := 10
 	for _, tc := range []struct {
