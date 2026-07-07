@@ -87,7 +87,7 @@ func setupHistogramBenchData(numSeries int, grouped bool) (seriesMap, MetadataFu
 
 func benchHistograms(b *testing.B, numSeries int, grouped bool) {
 	sMap, metadata, batches := setupHistogramBenchData(numSeries, grouped)
-	externalLabels := labels.FromStrings("project_id", "test-project")
+	externalLabels := labels.FromStrings("project_id", "test-project", "location", "us-central1")
 	cache := newSeriesCache(nil, nil, MetricTypePrefix)
 	cache.getLabelsByRef = func(ref storage.SeriesRef) labels.Labels {
 		return sMap[ref]
@@ -107,22 +107,42 @@ func benchHistograms(b *testing.B, numSeries int, grouped bool) {
 	}
 
 	b.ReportAllocs()
-
 	for b.Loop() {
 		batch := batches[1]
 		for len(batch) > 0 {
-			_, tail, err := sb.next(metadata, externalLabels, batch, nil)
+			series, tail, err := sb.next(metadata, externalLabels, batch, nil)
 			if err != nil {
 				b.Fatal(err)
+			}
+			if len(series) != numSeries {
+				b.Fatal("unexpected num of series", len(series))
 			}
 			batch = tail
 		}
 	}
 }
 
-func BenchmarkSampleBuilder_HistogramsGrouped_10(b *testing.B)    { benchHistograms(b, 10, true) }
-func BenchmarkSampleBuilder_HistogramsGrouped_100(b *testing.B)   { benchHistograms(b, 100, true) }
-func BenchmarkSampleBuilder_HistogramsGrouped_500(b *testing.B)   { benchHistograms(b, 500, true) }
-func BenchmarkSampleBuilder_HistogramsUngrouped_10(b *testing.B)  { benchHistograms(b, 10, false) }
-func BenchmarkSampleBuilder_HistogramsUngrouped_100(b *testing.B) { benchHistograms(b, 100, false) }
-func BenchmarkSampleBuilder_HistogramsUngrouped_500(b *testing.B) { benchHistograms(b, 500, false) }
+/*
+	export bench=after && go test ./google/export/... \
+		 -run '^$' -bench '^BenchmarkSampleBuilder_Histograms' \
+		 -benchtime 2s -count 6 -cpu 2 -benchmem -timeout 999m \
+	 | tee ${bench}.txt
+*/
+func BenchmarkSampleBuilder_Histograms(b *testing.B) {
+	for _, tc := range []struct {
+		name      string
+		numSeries int
+		grouped   bool
+	}{
+		{name: "Grouped_10", numSeries: 10, grouped: true},
+		{name: "Grouped_100", numSeries: 100, grouped: true},
+		{name: "Grouped_500", numSeries: 500, grouped: true},
+		{name: "Ungrouped_10", numSeries: 10, grouped: false},
+		{name: "Ungrouped_100", numSeries: 100, grouped: false},
+		{name: "Ungrouped_500", numSeries: 500, grouped: false},
+	} {
+		b.Run(fmt.Sprintf("case=%v", tc.name), func(b *testing.B) {
+			benchHistograms(b, tc.numSeries, tc.grouped)
+		})
+	}
+}
