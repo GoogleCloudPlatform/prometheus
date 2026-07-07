@@ -60,6 +60,10 @@ var (
 		Name: "gcm_export_exemplars_exported_total",
 		Help: "Number of exemplars exported at scrape time.",
 	})
+	samplesBuilt = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gcm_export_samples_built_total",
+		Help: "Number of samples built after export at scrape time.",
+	})
 	samplesDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "gcm_export_samples_dropped_total",
 		Help: "Number of exported samples that were intentionally dropped.",
@@ -393,6 +397,7 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 		reg.MustRegister(
 			prometheusSamplesDiscarded,
 			samplesExported,
+			samplesBuilt,
 			samplesDropped,
 			samplesSent,
 			samplesSendErrors,
@@ -628,6 +633,7 @@ func (e *Exporter) Export(metadata MetadataFunc, batch []record.RefSample, exemp
 			level.Debug(e.logger).Log("msg", "building sample failed", "err", err)
 			continue
 		}
+		samplesBuilt.Add(float64(len(samples)))
 		for _, s := range samples {
 			// Only enqueue samples for within our HA range.
 			if sampleInRange(s.proto, start, end) {
