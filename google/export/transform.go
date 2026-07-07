@@ -388,9 +388,10 @@ func (b *sampleBuilder) buildDistributions(
 	externalLabels labels.Labels,
 	metadata MetadataFunc,
 ) ([]hashedSeries, []record.RefSample, error) {
-	// The Prometheus/OpenMetrics exposition format require all histogram series for a single distribution
-	// to be grouped together. However, some sources do not comply e.g. https://github.com/Kong/kong/issues/14925,
-	// so we attempt to allow interleaved distributions as long as the buckets are in order.
+	// The OpenMetrics exposition format require all histogram series for a single distribution
+	// to be grouped together. However, Prometheus Text format do not restrict this
+	// (https://github.com/prometheus/docs/blob/main/docs/instrumenting/exposition_formats.md#grouping-and-sorting)
+	// and some sources interleaves series (e.g. https://github.com/Kong/kong/issues/14925).
 
 	// We build a cache and conclude a histogram complete once we've seen its _sum series and its +Inf bucket
 	// series. We consume all contiguous samples for the metric and return all completed histogram series.
