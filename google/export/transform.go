@@ -158,16 +158,14 @@ func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels
 			)
 			var v float64
 			resetTimestamp, v, ok = b.series.getResetAdjusted(storage.SeriesRef(sample.Ref), sample.T, sample.V)
+			// We may not have produced a value if:
+			//
+			//   1. It was the first sample of a cumulative and we only initialized  the reset timestamp with it.
 			if ok {
 				value = &monitoring_pb.TypedValue{
 					Value: &monitoring_pb.TypedValue_DoubleValue{DoubleValue: v},
 				}
 				discardExemplarIncIfExists(storage.SeriesRef(sample.Ref), exemplars, "counters-unsupported")
-			}
-			// We may not have produced a value if:
-			//
-			//   1. It was the first sample of a cumulative and we only initialized  the reset timestamp with it.
-			if value != nil {
 				//nolint:govet
 				ts := *c.proto
 
@@ -397,6 +395,9 @@ func (b *sampleBuilder) buildDistributions(
 	// series. We consume all contiguous samples for the metric and return all completed histogram series.
 	consumed := 0
 	defer func() {
+		// Since we build all distributions for a given metric family in a single
+		// buildDistributions call, we know we don't need to reuse cache elements anymore.
+		// Release them so we limit memory use.
 		for _, dist := range b.dists {
 			putDistribution(dist)
 		}
@@ -491,26 +492,28 @@ Loop:
 	}
 
 	b.histResultsBuf = b.histResultsBuf[:0]
+	// Go through all the cached distributions. If complete, build and add to the returned buffer.
 	for _, dist := range b.dists {
-		if dist.complete() {
-			dp, err := dist.build(dist.lset)
-			if err != nil {
-				return nil, samples[consumed:], err
-			}
-			if dp != nil && dist.proto != nil {
-				//nolint:govet
-				ts := *dist.proto
-				ts.Points = []*monitoring_pb.Point{{
-					Interval: &monitoring_pb.TimeInterval{
-						StartTime: getTimestamp(dist.resetTimestamp),
-						EndTime:   getTimestamp(dist.timestamp),
-					},
-					Value: &monitoring_pb.TypedValue{
-						Value: &monitoring_pb.TypedValue_DistributionValue{DistributionValue: dp},
-					},
-				}}
-				b.histResultsBuf = append(b.histResultsBuf, hashedSeries{hash: dist.hash, proto: &ts})
-			}
+		if !dist.complete() {
+			continue
+		}
+		dp, err := dist.build(dist.lset)
+		if err != nil {
+			return nil, samples[consumed:], err
+		}
+		if dp != nil && dist.proto != nil {
+			//nolint:govet
+			ts := *dist.proto
+			ts.Points = []*monitoring_pb.Point{{
+				Interval: &monitoring_pb.TimeInterval{
+					StartTime: getTimestamp(dist.resetTimestamp),
+					EndTime:   getTimestamp(dist.timestamp),
+				},
+				Value: &monitoring_pb.TypedValue{
+					Value: &monitoring_pb.TypedValue_DistributionValue{DistributionValue: dp},
+				},
+			}}
+			b.histResultsBuf = append(b.histResultsBuf, hashedSeries{hash: dist.hash, proto: &ts})
 		}
 	}
 	return b.histResultsBuf, samples[consumed:], nil
