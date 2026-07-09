@@ -26,7 +26,7 @@ import (
 	e2emon "github.com/efficientgo/e2e/monitoring"
 	"github.com/prometheus/client_golang/api"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
-	"github.com/prometheus/compliance/promqle2e"
+	"github.com/prometheus/prometheus/google/internal/3ptmp/promqle2e"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )

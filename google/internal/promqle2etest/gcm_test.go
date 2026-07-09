@@ -40,7 +40,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	dto "github.com/prometheus/client_model/go"
-	"github.com/prometheus/compliance/promqle2e"
+	"github.com/prometheus/prometheus/google/internal/3ptmp/promqle2e"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/oauth2/google"
 )

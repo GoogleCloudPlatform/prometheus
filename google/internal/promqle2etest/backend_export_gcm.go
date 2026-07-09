@@ -32,7 +32,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/compliance/promqle2e"
+	"github.com/prometheus/prometheus/google/internal/3ptmp/promqle2e"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/google/export"
 	"github.com/prometheus/prometheus/model/labels"
