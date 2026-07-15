@@ -461,6 +461,9 @@ const (
 // changed and applied to the exporter, potentially recreating the metric client.
 // NOTE: Runtime configuration will not override disable/disableAuth options from flags.
 func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
+	if e.opts.Disable {
+		return nil
+	}
 	// Note: We don't expect the NopExporter to call this. Only the config reloader calls it.
 	e.mtx.Lock()
 	defer e.mtx.Unlock()
@@ -817,10 +820,10 @@ func MetadataFuncFromContext(ctx context.Context) (MetadataFunc, bool) {
 // MetricMetadata is a copy of MetricMetadata in Prometheus's scrape package.
 // It is copied to break a dependency cycle.
 type MetricMetadata struct {
-	Metric string
-	Type   model.MetricType
-	Help   string
-	Unit   string
+	MetricFamily string
+	Type         model.MetricType
+	Help         string
+	Unit         string
 }
 
 // MetadataFunc gets metadata for a specific metric name.
@@ -849,8 +852,8 @@ func (e *Exporter) wrapMetadata(f MetadataFunc) MetadataFunc {
 // Help and Unit are left empty.
 func gaugeMetadata(metric string) (MetricMetadata, bool) {
 	return MetricMetadata{
-		Metric: metric,
-		Type:   model.MetricTypeGauge,
+		MetricFamily: metric,
+		Type:         model.MetricTypeGauge,
 	}, true
 }
 
@@ -858,37 +861,37 @@ func gaugeMetadata(metric string) (MetricMetadata, bool) {
 // Help and Unit are left empty.
 func untypedMetadata(metric string) (MetricMetadata, bool) {
 	return MetricMetadata{
-		Metric: metric,
-		Type:   model.MetricTypeUnknown,
+		MetricFamily: metric,
+		Type:         model.MetricTypeUnknown,
 	}, true
 }
 
 // Metrics Prometheus writes at scrape time for which no metadata is exposed.
 var internalMetricMetadata = map[string]MetricMetadata{
 	"up": {
-		Metric: "up",
-		Type:   model.MetricTypeGauge,
-		Help:   "Up indicates whether the last target scrape was successful.",
+		MetricFamily: "up",
+		Type:         model.MetricTypeGauge,
+		Help:         "Up indicates whether the last target scrape was successful.",
 	},
 	"scrape_samples_scraped": {
-		Metric: "scrape_samples_scraped",
-		Type:   model.MetricTypeGauge,
-		Help:   "How many samples were scraped during the last successful scrape.",
+		MetricFamily: "scrape_samples_scraped",
+		Type:         model.MetricTypeGauge,
+		Help:         "How many samples were scraped during the last successful scrape.",
 	},
 	"scrape_duration_seconds": {
-		Metric: "scrape_duration_seconds",
-		Type:   model.MetricTypeGauge,
-		Help:   "Duration of the last scrape.",
+		MetricFamily: "scrape_duration_seconds",
+		Type:         model.MetricTypeGauge,
+		Help:         "Duration of the last scrape.",
 	},
 	"scrape_samples_post_metric_relabeling": {
-		Metric: "scrape_samples_post_metric_relabeling",
-		Type:   model.MetricTypeGauge,
-		Help:   "How many samples were ingested after relabeling.",
+		MetricFamily: "scrape_samples_post_metric_relabeling",
+		Type:         model.MetricTypeGauge,
+		Help:         "How many samples were ingested after relabeling.",
 	},
 	"scrape_series_added": {
-		Metric: "scrape_series_added",
-		Type:   model.MetricTypeGauge,
-		Help:   "Number of new series added in the last scrape.",
+		MetricFamily: "scrape_series_added",
+		Type:         model.MetricTypeGauge,
+		Help:         "Number of new series added in the last scrape.",
 	},
 }
 
@@ -1119,7 +1122,7 @@ func (m *Matchers) Set(s string) error {
 	if s == "" {
 		return nil
 	}
-	ms, err := parser.ParseMetricSelector(s)
+	ms, err := parser.NewParser(parser.Options{}).ParseMetricSelector(s)
 	if err != nil {
 		return fmt.Errorf("invalid metric matcher %q: %w", s, err)
 	}
