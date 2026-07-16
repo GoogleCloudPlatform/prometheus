@@ -65,8 +65,12 @@ func gmpPrometheusImageOrFail(t testing.TB) string {
 	return image
 }
 
-// TODO(bwplotka): Add target --PromProto--> Prometheus vanilla --PRW 2.0--> GCM case once GCM exposes PRW 2.0.
-func setupBackends(t testing.TB) (promqle2e.PrometheusBackend, PrometheusForkGCMBackend, LocalExportGCMBackend) {
+// setupBackends sets up the backends used in acceptance tests:
+// - prom: target --PromProto--> Prometheus (vanilla OSS reference behaviour)
+// - gmpPromGCM: target --PromProto--> Prometheus GMP fork --GCM API--> GCM
+// - promPRWGCM: target --PromProto--> Prometheus vanilla --PRW 2.0--> GCM
+// - localExportGCM: local prometheus-engine/pkg/export code --GCM API--> GCM
+func setupBackends(t testing.TB) (promqle2e.PrometheusBackend, PrometheusForkGCMBackend, PrometheusRemoteWriteGCMBackend, LocalExportGCMBackend) {
 	// target --PromProto--> Prometheus (referencing OSS behaviour).
 	prom := promqle2e.PrometheusBackend{
 		Name:  "prom",
@@ -78,12 +82,18 @@ func setupBackends(t testing.TB) (promqle2e.PrometheusBackend, PrometheusForkGCM
 		Image: gmpPrometheusImageOrFail(t),
 		GCMSA: gcmServiceAccountOrFail(t),
 	}
+	// target --PromProto--> Prometheus vanilla --PRW 2.0--> GCM
+	promPRWGCM := PrometheusRemoteWriteGCMBackend{
+		Name:  "prom-prw-gcm",
+		Image: prom.Image,
+		GCMSA: gcmServiceAccountOrFail(t),
+	}
 	// local prometheus-engine/pkg/export code --GCM API--> GCM.
 	localExportGCM := LocalExportGCMBackend{
 		Name:  "local-export-gcm",
 		GCMSA: gcmServiceAccountOrFail(t),
 	}
-	return prom, gmpPromGCM, localExportGCM
+	return prom, gmpPromGCM, promPRWGCM, localExportGCM
 }
 
 // TestExportGCM_PrometheusCounter_NoCT tests a counter sample behaviour
@@ -91,7 +101,7 @@ func setupBackends(t testing.TB) (promqle2e.PrometheusBackend, PrometheusForkGCM
 func TestExportGCM_PrometheusCounter_NoCT(t *testing.T) {
 	const interval = 15 * time.Second
 
-	prom, gmpPromGCM, localExportGCM := setupBackends(t)
+	prom, gmpPromGCM, promPRWGCM, localExportGCM := setupBackends(t)
 
 	pt := promqle2e.NewScrapeStyleTest(t)
 	pt.SetCurrentTime(time.Now().Add(-10 * time.Minute)) // We only do a few scrapes, so -10m buffer is enough.
@@ -119,12 +129,14 @@ func TestExportGCM_PrometheusCounter_NoCT(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(c, 10, localExportGCM).
 		Expect(c, 10, gmpPromGCM).
+		Expect(c, 10, promPRWGCM).
 		Expect(c, 210, prom)
 
 	c.Add(40)
 	pt.RecordScrape(interval).
 		Expect(c, 50, localExportGCM).
 		Expect(c, 50, gmpPromGCM).
+		Expect(c, 50, promPRWGCM).
 		Expect(c, 250, prom)
 
 	// Reset to 0 (simulating instrumentation resetting metric or restarting target).
@@ -133,12 +145,14 @@ func TestExportGCM_PrometheusCounter_NoCT(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(c, 0, localExportGCM).
 		Expect(c, 0, gmpPromGCM).
+		Expect(c, 0, promPRWGCM).
 		Expect(c, 0, prom)
 
 	c.Add(150)
 	pt.RecordScrape(interval).
 		Expect(c, 150, localExportGCM).
 		Expect(c, 150, gmpPromGCM).
+		Expect(c, 150, promPRWGCM).
 		Expect(c, 150, prom)
 
 	// Reset to 0 with addition.
@@ -148,18 +162,21 @@ func TestExportGCM_PrometheusCounter_NoCT(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(c, 20, localExportGCM).
 		Expect(c, 20, gmpPromGCM).
+		Expect(c, 20, promPRWGCM).
 		Expect(c, 20, prom)
 
 	c.Add(50)
 	pt.RecordScrape(interval).
 		Expect(c, 70, localExportGCM).
 		Expect(c, 70, gmpPromGCM).
+		Expect(c, 70, promPRWGCM).
 		Expect(c, 70, prom)
 
 	c.Add(10)
 	pt.RecordScrape(interval).
 		Expect(c, 80, localExportGCM).
 		Expect(c, 80, gmpPromGCM).
+		Expect(c, 80, promPRWGCM).
 		Expect(c, 80, prom)
 
 	// Tricky reset case, unnoticeable reset for Prometheus without created timestamp as well.
@@ -169,6 +186,7 @@ func TestExportGCM_PrometheusCounter_NoCT(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(c, 600, localExportGCM).
 		Expect(c, 600, gmpPromGCM).
+		Expect(c, 600, promPRWGCM).
 		Expect(c, 600, prom)
 
 	// Prometheus SDK used for replies actually emit CTs.
@@ -197,7 +215,7 @@ func TestExportGCM_PrometheusCounter_NoCT(t *testing.T) {
 func TestExportGCM_PrometheusCounter_WithCT(t *testing.T) {
 	const interval = 15 * time.Second
 
-	prom, gmpPromGCM, localExportGCM := setupBackends(t)
+	prom, gmpPromGCM, promPRWGCM, localExportGCM := setupBackends(t)
 
 	pt := promqle2e.NewScrapeStyleTest(t)
 	pt.SetCurrentTime(time.Now().Add(-10 * time.Minute)) // We only do a few scrapes, so -10m buffer is enough.
@@ -216,6 +234,7 @@ func TestExportGCM_PrometheusCounter_WithCT(t *testing.T) {
 	c = counter.WithLabelValues("bar")
 	c.Add(200)
 	pt.RecordScrape(interval).
+		Expect(c, 200, promPRWGCM).
 		Expect(c, 200, prom)
 	// Nothing is expected for GCM due to cannibalization required if the target does not emit CT (which this metric does not).
 	// See https://cloud.google.com/stackdriver/docs/managed-prometheus/troubleshooting#counter-sums
@@ -225,12 +244,14 @@ func TestExportGCM_PrometheusCounter_WithCT(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(c, 10, localExportGCM).
 		Expect(c, 10, gmpPromGCM).
+		Expect(c, 210, promPRWGCM).
 		Expect(c, 210, prom)
 
 	c.Add(40)
 	pt.RecordScrape(interval).
 		Expect(c, 50, localExportGCM).
 		Expect(c, 50, gmpPromGCM).
+		Expect(c, 250, promPRWGCM).
 		Expect(c, 250, prom)
 
 	// Reset to 0 (simulating instrumentation resetting metric or restarting target).
@@ -239,12 +260,14 @@ func TestExportGCM_PrometheusCounter_WithCT(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(c, 0, localExportGCM).
 		Expect(c, 0, gmpPromGCM).
+		Expect(c, 0, promPRWGCM).
 		Expect(c, 0, prom)
 
 	c.Add(150)
 	pt.RecordScrape(interval).
 		Expect(c, 150, localExportGCM).
 		Expect(c, 150, gmpPromGCM).
+		Expect(c, 150, promPRWGCM).
 		Expect(c, 150, prom)
 
 	// Reset to 0 with addition.
@@ -254,18 +277,21 @@ func TestExportGCM_PrometheusCounter_WithCT(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(c, 20, localExportGCM).
 		Expect(c, 20, gmpPromGCM).
+		Expect(c, 20, promPRWGCM).
 		Expect(c, 20, prom)
 
 	c.Add(50)
 	pt.RecordScrape(interval).
 		Expect(c, 70, localExportGCM).
 		Expect(c, 70, gmpPromGCM).
+		Expect(c, 70, promPRWGCM).
 		Expect(c, 70, prom)
 
 	c.Add(10)
 	pt.RecordScrape(interval).
 		Expect(c, 80, localExportGCM).
 		Expect(c, 80, gmpPromGCM).
+		Expect(c, 80, promPRWGCM).
 		Expect(c, 80, prom)
 
 	// Tricky reset case, unnoticeable reset for Prometheus without created timestamp as well.
@@ -275,6 +301,7 @@ func TestExportGCM_PrometheusCounter_WithCT(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(c, 600, localExportGCM).
 		Expect(c, 600, gmpPromGCM).
+		Expect(c, 600, promPRWGCM).
 		Expect(c, 600, prom)
 
 	// Prometheus SDK supports CTs. This "transform" validates that invariance.
@@ -301,7 +328,7 @@ func TestExportGCM_PrometheusCounter_WithCT(t *testing.T) {
 func TestExportGCM_PrometheusGauge(t *testing.T) {
 	const interval = 15 * time.Second
 
-	prom, gmpPromGCM, localExportGCM := setupBackends(t)
+	prom, gmpPromGCM, promPRWGCM, localExportGCM := setupBackends(t)
 
 	pt := promqle2e.NewScrapeStyleTest(t)
 	pt.SetCurrentTime(time.Now().Add(-10 * time.Minute)) // We only do a few scrapes, so -10m buffer is enough.
@@ -322,18 +349,21 @@ func TestExportGCM_PrometheusGauge(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(g, 200, localExportGCM).
 		Expect(g, 200, gmpPromGCM).
+		Expect(g, 200, promPRWGCM).
 		Expect(g, 200, prom)
 
 	g.Sub(10)
 	pt.RecordScrape(interval).
 		Expect(g, 190, localExportGCM).
 		Expect(g, 190, gmpPromGCM).
+		Expect(g, 190, promPRWGCM).
 		Expect(g, 190, prom)
 
 	g.Add(40)
 	pt.RecordScrape(interval).
 		Expect(g, 230, localExportGCM).
 		Expect(g, 230, gmpPromGCM).
+		Expect(g, 230, promPRWGCM).
 		Expect(g, 230, prom)
 
 	// Reset to 0 (simulating instrumentation resetting metric or restarting target).
@@ -342,6 +372,7 @@ func TestExportGCM_PrometheusGauge(t *testing.T) {
 	pt.RecordScrape(interval).
 		Expect(g, 0, localExportGCM).
 		Expect(g, 0, gmpPromGCM).
+		Expect(g, 0, promPRWGCM).
 		Expect(g, 0, prom)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
@@ -355,7 +386,7 @@ func TestExportGCM_MetricHelpIngestion(t *testing.T) {
 		mName    = "promqle2e_test_gauge_help"
 	)
 
-	_, _, localExportGCM := setupBackends(t)
+	_, _, _, localExportGCM := setupBackends(t)
 
 	pt := promqle2e.NewScrapeStyleTest(t)
 	pt.SetCurrentTime(time.Now().Add(-10 * time.Minute)) // We only do a few scrapes, so -10m buffer is enough.
