@@ -85,9 +85,7 @@ remote_write:
   google_iam:
     credentials_file: "%s"
   write_relabel_configs:
-  - source_labels: ['__type__']
-    action: labeldrop
-  - source_labels: ['__unit__']
+  - regex: '(__type__|__unit__)'
     action: labeldrop
 `, name, projectID, location, cluster, scrapeTargetAddress, credsFile)
 	if err := os.WriteFile(filepath.Join(f.Dir(), "prometheus.yml"), []byte(config), 0600); err != nil {
