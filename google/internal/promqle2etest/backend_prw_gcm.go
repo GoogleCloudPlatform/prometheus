@@ -84,9 +84,9 @@ remote_write:
     retry_on_http_429: true
   google_iam:
     credentials_file: "%s"
-  write_relabel_configs:
-  - regex: '(__type__|__unit__)'
-    action: labeldrop
+  # write_relabel_configs:
+  # - regex: '(__type__|__unit__)'
+  #   action: labeldrop
 `, name, projectID, location, cluster, scrapeTargetAddress, credsFile)
 	if err := os.WriteFile(filepath.Join(f.Dir(), "prometheus.yml"), []byte(config), 0600); err != nil {
 		return &e2emon.Prometheus{Runnable: e2e.NewFailedRunnable(name, fmt.Errorf("create prometheus config failed: %w", err))}
