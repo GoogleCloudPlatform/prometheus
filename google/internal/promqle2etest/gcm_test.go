@@ -74,7 +74,7 @@ func setupBackends(t testing.TB) (promqle2e.PrometheusBackend, PrometheusForkGCM
 	// target --PromProto--> Prometheus (referencing OSS behaviour).
 	prom := promqle2e.PrometheusBackend{
 		Name:  "prom",
-		Image: "quay.io/prometheus/prometheus:v3.5.0",
+		Image: "prom/prometheus-linux-amd64:debuglog",
 	}
 	// target --PromProto--> Prometheus GMP fork --GCM API--> GCM
 	gmpPromGCM := PrometheusForkGCMBackend{

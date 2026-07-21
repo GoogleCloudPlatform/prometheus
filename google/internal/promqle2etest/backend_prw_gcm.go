@@ -79,6 +79,7 @@ remote_write:
 - name: "google_cloud"
   url: "https://staging-monitoring.sandbox.googleapis.com/v1/prometheus/api/v1/write"
   protobuf_message: "io.prometheus.write.v2.Request"
+  failed_request_logging: true
   send_exemplars: true
   queue_config:
     retry_on_http_429: true
@@ -102,6 +103,7 @@ remote_write:
 		"--enable-feature=st-storage":             "",
 		"--enable-feature=st-synthesis":           "",
 		"--enable-feature=type-and-unit-labels":   "",
+		"--enable-feature=xor2-encoding":          "",
 		"--storage.tsdb.no-lockfile":              "",
 		"--storage.tsdb.retention.time":           "1d",
 		"--storage.tsdb.wal-compression":          "",
@@ -109,7 +111,7 @@ remote_write:
 		"--storage.tsdb.max-block-duration":       "2h",
 		"--web.enable-lifecycle":                  "",
 		"--log.format":                            "json",
-		"--log.level":                             "info",
+		"--log.level":                             "debug",
 	}
 
 	p := e2emon.AsInstrumented(f.Init(e2e.StartOptions{
