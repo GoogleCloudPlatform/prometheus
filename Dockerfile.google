@@ -4,29 +4,48 @@
 
 # For the lack of the other official Google nodejs image, we use serverless project
 # images to build the Prometheus frontent (https://cloud.google.com/docs/buildpacks/base-images).
-ARG IMAGE_BUILD_NODEJS=us-central1-docker.pkg.dev/serverless-runtimes/google-22/runtimes/nodejs22:latest@sha256:9e88442205b4c956ca4996c2be626db6ef412043182cdd620e741d0d5e14b6a6
+ARG IMAGE_BUILD_NODEJS=gke.gcr.io/debian-base:bookworm-v1.0.8-gke.9@sha256:fc22d178e95261ca59987ca396107c4bd8b6f90d4a64c7f387f22eeb4529546a
 ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.26.4@sha256:3444149d0a7e3f7cfb9c2db65f0f75676fe6ad04de3ce72674efb120c08dd1c1
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/base-nossl-debian12:debug@sha256:2b89aea887933b8595f62c3d7e05a2718a0594e21e506952ce55b68b537f4fb6
 ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc:gke_distroless_20260601.00_p0@sha256:1b74f92a381c5269d5018b08ce0464cfcb310b6b9b6d98767ba3300838483fc4
 
-FROM ${IMAGE_BUILD_GO} AS gobase
+FROM --platform=$BUILDPLATFORM ${IMAGE_BUILD_GO} AS gobase
 WORKDIR /workspace
-# Verify early if we have all we need.
 RUN go version
 
-FROM ${IMAGE_BUILD_NODEJS} AS nodebase
+FROM --platform=$BUILDPLATFORM ${IMAGE_BUILD_NODEJS} AS nodebase
 WORKDIR /workspace
-# Changed to root,as normally it's underprivileged www-data user.
-# For building stages it's fine to do it as root and have less complex scripts.
-USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    bzip2 \
+    ca-certificates \
+    curl \
+    git \
+    make
+
+# Download and install nvm with manual checksum verification
+RUN curl -sS -L https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.6/install.sh -o /tmp/install.sh && \
+    echo "2ef7e8d4373c1ffd70daa55f919f629e98a619543ffc0a8d892d77a5247e50e4  /tmp/install.sh" | sha256sum -c - && \
+    bash /tmp/install.sh && \
+    rm /tmp/install.sh
+
+COPY web/ui/.nvmrc .nvmrc
+
+# Install Node.js version from .nvmrc and symlink to /usr/local/bin
+RUN export NVM_DIR="/root/.nvm" \
+    && [ -s "$NVM_DIR/nvm.sh" ] \
+    && set -- --no-use && . "$NVM_DIR/nvm.sh" \
+    && nvm install \
+    && nvm use \
+    && corepack enable pnpm \
+    && ln -sf "$NVM_DIR/versions/node/$(nvm current)/bin"/* /usr/local/bin/
+
 # Go, make, git, bzip2 are needed in Prometheus vendor and build steps, take Go
 # from the gobase, rest from apt.
 COPY --from=gobase /usr/local/go /usr/local/
 ENV PATH="/usr/local/go/bin:${PATH}"
 ENV UV_USE_IO_URING=0
 ENV UV_THREADPOOL_SIZE=1
-RUN apt-get update && apt-get -y install bzip2 make git
-RUN corepack enable pnpm
 RUN pnpm config set child-concurrency 1
 # Verify early if we have all we need.
 RUN npm version
@@ -84,9 +103,15 @@ ENV GOWORK=off
 ENV GOARCH=${TARGETARCH}
 ENV GOOS=${TARGETOS}
 RUN if [ "${TARGETARCH}" = "arm64" ] && [ "${BUILDARCH}" != "arm64" ]; then \
-      apt install -y --no-install-recommends \
-        gcc-aarch64-linux-gnu libc6-dev-arm64-cross; \
-      CC=aarch64-linux-gnu-gcc; \
+      apt-get update && apt-get install -y --no-install-recommends \
+        gcc-aarch64-linux-gnu libc6-dev-arm64-cross && \
+      rm -rf /var/lib/apt/lists/*; \
+      export CC=aarch64-linux-gnu-gcc; \
+    elif [ "${TARGETARCH}" = "amd64" ] && [ "${BUILDARCH}" != "amd64" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        gcc-x86-64-linux-gnu libc6-dev-amd64-cross && \
+      rm -rf /var/lib/apt/lists/*; \
+      export CC=x86_64-linux-gnu-gcc; \
     fi && \ 
     go build \
     -tags builtinassets -mod=vendor \
