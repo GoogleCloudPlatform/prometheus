@@ -11,3 +11,13 @@ data/
 
 /vendor
 
+# Ignore local compiled binaries
+/prometheus
+/promtool
+/promtool-benchmark
+
+# Ignore git repository details unless required
+.git/
+
+# Ignore local Node dependencies
+**/node_modules/
