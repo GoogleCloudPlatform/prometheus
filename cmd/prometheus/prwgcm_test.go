@@ -124,7 +124,7 @@ remote_write:
 	require.NoError(t, err)
 	gcmAPI := v1.NewAPI(gcmCl)
 
-	query := `up{job="test"}`
+	query := `go_goroutines{job="test"}`
 
 	localVal, warnings, err := localAPI.Query(ctx, query, time.Now())
 	require.NoError(t, err)
