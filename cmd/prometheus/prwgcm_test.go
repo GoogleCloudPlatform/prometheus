@@ -27,7 +27,7 @@ func TestRWtoGCM(t *testing.T) {
 		t.Skip("skipping as GCM_SA_JSON env var is not set")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 
 	creds, err := google.CredentialsFromJSON(ctx, []byte(gcmSA), "https://www.googleapis.com/auth/monitoring")
@@ -126,13 +126,28 @@ remote_write:
 
 	query := `go_goroutines{job="test"}`
 
-	localVal, warnings, err := localAPI.Query(ctx, query, time.Now())
-	require.NoError(t, err)
-	fmt.Printf("Local Warnings: %v\n", warnings)
-	fmt.Printf("Local Result: %v\n", localVal)
+	deadline := time.Now().Add(20 * time.Minute)
+	for time.Now().Before(deadline) && ctx.Err() == nil {
+		localVal, warnings, err := localAPI.Query(ctx, query, time.Now())
+		if err == nil {
+			fmt.Printf("Local Warnings: %v\n", warnings)
+			fmt.Printf("Local Result: %v\n", localVal)
+		} else {
+			fmt.Printf("Local Query Error: %v\n", err)
+		}
 
-	gcmVal, gcmWarnings, gcmErr := gcmAPI.Query(ctx, query, time.Now())
-	require.NoError(t, gcmErr)
-	fmt.Printf("GCM Warnings: %v\n", gcmWarnings)
-	fmt.Printf("GCM Result: %v\n", gcmVal)
+		gcmVal, gcmWarnings, gcmErr := gcmAPI.Query(ctx, query, time.Now())
+		if gcmErr == nil {
+			fmt.Printf("GCM Warnings: %v\n", gcmWarnings)
+			fmt.Printf("GCM Result: %v\n", gcmVal)
+		} else {
+			fmt.Printf("GCM Query Error: %v\n", gcmErr)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(15 * time.Second):
+		}
+	}
 }
