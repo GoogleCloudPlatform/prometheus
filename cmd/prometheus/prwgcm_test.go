@@ -66,10 +66,10 @@ remote_write:
 - name: "google_cloud"
   url: "https://staging-monitoring.sandbox.googleapis.com/v1/prometheus/api/v1/write"
   protobuf_message: "io.prometheus.write.v2.Request"
-  failed_request_logging: true
   send_exemplars: true
   queue_config:
     retry_on_http_429: true
+    max_samples_per_send: 200
   google_iam:
     credentials_file: "%s"
 `, collector, creds.ProjectID, location, cluster, port, credsFile)
@@ -84,7 +84,6 @@ remote_write:
 		"--storage.tsdb.path="+filepath.Join(tmpDir, "data"),
 		"--enable-feature=exemplar-storage",
 		"--enable-feature=native-histograms",
-		"--enable-feature=promql-nhcb-as-classic",
 		"--enable-feature=st-storage",
 		"--enable-feature=st-synthesis",
 		"--enable-feature=type-and-unit-labels",
