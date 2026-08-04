@@ -143,7 +143,6 @@ func buildTracerProvider(ctx context.Context, tracingCfg config.TracingConfig) (
 	// Create a resource describing the service and the runtime.
 	res, err := resource.New(
 		ctx,
-		resource.WithSchemaURL(semconv.SchemaURL),
 		resource.WithAttributes(
 			semconv.ServiceNameKey.String(serviceName),
 			semconv.ServiceVersionKey.String(version.Version),
