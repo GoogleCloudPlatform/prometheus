@@ -112,7 +112,7 @@ func (d *Discovery) refreshTasks(ctx context.Context) ([]*targetgroup.Group, err
 			for _, address := range netAttachment.Addresses {
 				var added bool
 
-				ip := address.Addr().String()
+				ip := ipString(address.Addr())
 
 				for _, p := range servicePorts[s.ServiceID] {
 					if p.Protocol != network.TCP {
