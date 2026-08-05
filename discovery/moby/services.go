@@ -77,7 +77,7 @@ func (d *Discovery) refreshServices(ctx context.Context) ([]*targetgroup.Group, 
 
 		for _, p := range s.Endpoint.VirtualIPs {
 			var added bool
-			ip := p.Addr.Addr().String()
+			ip := ipString(p.Addr.Addr())
 
 			for _, e := range s.Endpoint.Ports {
 				if e.Protocol != network.TCP {
