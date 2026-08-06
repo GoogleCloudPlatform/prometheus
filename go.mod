@@ -52,7 +52,7 @@ require (
 	github.com/hetznercloud/hcloud-go/v2 v2.43.0
 	github.com/ionos-cloud/sdk-go/v6 v6.3.8
 	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.18.7
 	github.com/kolo/xmlrpc v0.0.0-20220921171641-a4b6fa1dd06b
 	github.com/linode/linodego v1.69.1
 	github.com/miekg/dns v1.1.72
@@ -108,7 +108,7 @@ require (
 	golang.org/x/text v0.39.0
 	google.golang.org/api v0.278.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260615183401-62b3387ff324
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.35.3

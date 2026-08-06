@@ -7,7 +7,7 @@
 ARG IMAGE_BUILD_NODEJS=gke.gcr.io/debian-base:bookworm-v1.0.8-gke.9@sha256:fc22d178e95261ca59987ca396107c4bd8b6f90d4a64c7f387f22eeb4529546a
 ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.26.5@sha256:5075e8b0e1a7913c2274737c1a8b379ea264322c082bd21d3911d196dce46559
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/base-nossl-debian12:debug@sha256:2b89aea887933b8595f62c3d7e05a2718a0594e21e506952ce55b68b537f4fb6
-ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc:gke_distroless_20260715.00_p0@sha256:806b48f065651c95ef6547c4b136f0a1acfe1ad259bdae77c3696a60a044394f
+ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc:gke_distroless_20260801.00_p0@sha256:0625a71ac0c78014343a6743ff368f50d1001769d4e181390dff83515deaf1f5
 
 FROM --platform=$BUILDPLATFORM ${IMAGE_BUILD_GO} AS gobase
 WORKDIR /workspace
