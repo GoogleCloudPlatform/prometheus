@@ -75,7 +75,7 @@ func newWatcher(ctx context.Context, logger log.Logger, client kubernetes.Interf
 			select {
 			case e, ok := <-watcher.w.ResultChan():
 				if ok {
-					watcher.update(logger, e)
+					watcher.update(logger, e, config)
 					continue
 				}
 
@@ -93,21 +93,27 @@ func newWatcher(ctx context.Context, logger log.Logger, client kubernetes.Interf
 	return watcher, nil
 }
 
-func (w *secretWatcher) update(logger log.Logger, e watch.Event) {
+func (w *secretWatcher) update(logger log.Logger, e watch.Event, config *KubernetesSecretConfig) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	switch e.Type {
 	case watch.Modified, watch.Added:
-		secret := e.Object.(*corev1.Secret)
-		w.s = secret
+		secret, ok := e.Object.(*corev1.Secret)
+		if ok && secret != nil && secret.Name == config.Name {
+			w.s = secret
+		}
 	case watch.Deleted:
 		w.s = nil
 	case watch.Bookmark:
 		// Disabled explicitly when creating the watch interface.
 	case watch.Error:
 		//nolint:errcheck
-		logger.Log("msg", "watch error event", "namespace", w.s.Namespace, "name", w.s.Name)
+		if w.s != nil {
+			logger.Log("msg", "watch error event", "namespace", w.s.Namespace, "name", w.s.Name)
+		} else {
+			logger.Log("msg", "watch error event", "namespace", config.Namespace, "name", config.Name)
+		}
 	}
 }
 
@@ -115,7 +121,7 @@ func (w *secretWatcher) secret(config *KubernetesSecretConfig) Secret {
 	fn := SecretFn(func(_ context.Context) (string, error) {
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		if w.s == nil {
+		if w.s == nil || w.s.Name != config.Name {
 			return "", errNotFound(config.Namespace, config.Name)
 		}
 		return getValue(w.s, config.Key)

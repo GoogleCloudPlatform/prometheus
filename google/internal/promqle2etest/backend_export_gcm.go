@@ -184,7 +184,7 @@ func (l *runningLocalExportWithGCM) IngestSamples(ctx context.Context, t testing
 				t.Fatal(err)
 			}
 		}
-		tp, err := textparse.New(b.Bytes(), string(expfmt.NewFormat(expfmt.TypeProtoDelim)), true, st)
+		tp, err := textparse.New(b.Bytes(), string(expfmt.NewFormat(expfmt.TypeProtoDelim)), st, textparse.ParserOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,7 +219,7 @@ func (l *runningLocalExportWithGCM) IngestSamples(ctx context.Context, t testing
 				continue
 			case textparse.EntryHelp:
 				mName, mHelp := tp.Help()
-				currMeta.Metric, currMeta.Help = string(mName), string(mHelp)
+				currMeta.MetricFamily, currMeta.Help = string(mName), string(mHelp)
 				continue
 			case textparse.EntryUnit:
 				// Proto format won't give us that anyway.
@@ -238,10 +238,10 @@ func (l *runningLocalExportWithGCM) IngestSamples(ctx context.Context, t testing
 			if parsedTimestamp != nil {
 				t = *parsedTimestamp
 			}
-			metadata[currMeta.Metric] = currMeta
+			metadata[currMeta.MetricFamily] = currMeta
 
 			lset := labels.New()
-			_ = tp.Metric(&lset)
+			tp.Labels(&lset)
 			// Add manually an 'external label' that will allow us to filter by the backend.
 			lset = labels.NewBuilder(lset).Set("collector", "local-export-gcm").Labels()
 			l.labelsByRef[storage.SeriesRef(ref)] = lset

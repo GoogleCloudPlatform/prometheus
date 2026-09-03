@@ -49,9 +49,9 @@ func TestSeriesCache_populate_Info(t *testing.T) {
 	mdFunc := func(m string) (MetricMetadata, bool) {
 		if m == metricName {
 			return MetricMetadata{
-				Metric: metricName,
-				Type:   model.MetricTypeInfo,
-				Help:   "info help",
+				MetricFamily: metricName,
+				Type:         model.MetricTypeInfo,
+				Help:         "info help",
 			}, true
 		}
 		return MetricMetadata{}, false
@@ -108,9 +108,9 @@ func TestSeriesCache_populate_Stateset(t *testing.T) {
 	mdFunc := func(m string) (MetricMetadata, bool) {
 		if m == metricName {
 			return MetricMetadata{
-				Metric: metricName,
-				Type:   model.MetricTypeStateset,
-				Help:   "stateset help",
+				MetricFamily: metricName,
+				Type:         model.MetricTypeStateset,
+				Help:         "stateset help",
 			}, true
 		}
 		return MetricMetadata{}, false
@@ -311,7 +311,7 @@ func TestSeriesCache_setMatchers(t *testing.T) {
 			return labels.FromStrings("ref", "2")
 		}
 		t.Fatal("expected either 1 or 2 ref, got", i)
-		return nil
+		return labels.EmptyLabels()
 	}
 
 	// Fake now second timestamp.
