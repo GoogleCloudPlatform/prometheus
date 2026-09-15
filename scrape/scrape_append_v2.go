@@ -26,6 +26,7 @@ import (
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/stsynthesis"
 	"github.com/prometheus/prometheus/model/textparse"
 	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/model/value"
@@ -157,7 +158,7 @@ loop:
 			h                        *histogram.Histogram
 			fh                       *histogram.FloatHistogram
 			skipAppend               bool
-			stCache                  *stCache
+			stCache                  *stsynthesis.Cache
 		)
 		if et, err = p.Next(); err != nil {
 			if errors.Is(err, io.EOF) {
@@ -458,9 +459,9 @@ func (sl *scrapeLoop) checkAndSynthesizeStartTime(
 	h *histogram.Histogram,
 	fh *histogram.FloatHistogram,
 	t int64,
-) (int64, float64, *histogram.Histogram, *histogram.FloatHistogram, bool, *stCache) {
+) (int64, float64, *histogram.Histogram, *histogram.FloatHistogram, bool, *stsynthesis.Cache) {
 	var skipAppend bool
-	var c *stCache
+	var c *stsynthesis.Cache
 
 	// TODO(https://github.com/prometheus/prometheus/issues/1790): Move isSeriesPartOfFamily inside parsers.
 	if ce == nil || ce.st == nil {
@@ -476,18 +477,18 @@ func (sl *scrapeLoop) checkAndSynthesizeStartTime(
 		default:
 			return st, val, h, fh, skipAppend, c
 		}
-		c = &stCache{}
+		c = &stsynthesis.Cache{}
 	} else {
 		c = ce.st
 	}
 
 	switch {
 	case fh != nil:
-		fh, st, skipAppend = c.synthesizeFloatHistogram(fh, t)
+		fh, st, skipAppend = c.SynthesizeFloatHistogram(fh, t)
 	case h != nil:
-		h, st, skipAppend = c.synthesizeHistogram(h, t)
+		h, st, skipAppend = c.SynthesizeHistogram(h, t)
 	default:
-		val, st, skipAppend = c.synthesizeFloat(val, t)
+		val, st, skipAppend = c.SynthesizeFloat(val, t)
 	}
 
 	return st, val, h, fh, skipAppend, c
