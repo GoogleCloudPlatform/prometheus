@@ -10,6 +10,8 @@ build:
           path: ./cmd/prometheus
         - name: promtool
           path: ./cmd/promtool
+        - name: prwproxy
+          path: ./cmd/prwproxy
     tags:
         all:
             - netgo
