@@ -14,8 +14,11 @@
 package prwproxy
 
 import (
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	"github.com/prometheus/prometheus/model/labels"
@@ -221,4 +224,82 @@ func TestTransform_DoesNotMutateInput(t *testing.T) {
 	_ = tr.Transform(in)
 	_ = tr.Transform(in)
 	require.Equal(t, before, decode(t, in))
+}
+
+func TestTransform_OutOfOrderAndDuplicateTimestamps(t *testing.T) {
+	tr := testTransformer(t)
+
+	// 1. Anchor sample at t=2000, v=100 (dropped to establish ST reference).
+	got := decode(t, tr.Transform(request(t, series{
+		name:    "http_requests_total",
+		typ:     writev2.Metadata_METRIC_TYPE_COUNTER,
+		samples: []writev2.Sample{{Value: 100, Timestamp: 2000}},
+	})))
+	require.Empty(t, got)
+	require.Equal(t, 0.0, testutil.ToFloat64(tr.metrics.outOfOrderSamples))
+
+	// 2. Out-of-order sample at t=1500, v=90.
+	// Without ordering validation, v=90 < 100 would falsely trigger a counter
+	// reset and corrupt the start timestamp state. With validation, it is dropped.
+	got = decode(t, tr.Transform(request(t, series{
+		name:    "http_requests_total",
+		typ:     writev2.Metadata_METRIC_TYPE_COUNTER,
+		samples: []writev2.Sample{{Value: 90, Timestamp: 1500}},
+	})))
+	require.Empty(t, got)
+	require.Equal(t, 1.0, testutil.ToFloat64(tr.metrics.outOfOrderSamples))
+
+	// 3. Duplicate timestamp sample at t=2000, v=105 (also dropped).
+	got = decode(t, tr.Transform(request(t, series{
+		name:    "http_requests_total",
+		typ:     writev2.Metadata_METRIC_TYPE_COUNTER,
+		samples: []writev2.Sample{{Value: 105, Timestamp: 2000}},
+	})))
+	require.Empty(t, got)
+	require.Equal(t, 2.0, testutil.ToFloat64(tr.metrics.outOfOrderSamples))
+
+	// 4. Subsequent valid in-order sample at t=3000, v=125.
+	// Must be re-based against the uncorrupted original anchor (v=100, ST=2000).
+	got = decode(t, tr.Transform(request(t, series{
+		name:    "http_requests_total",
+		typ:     writev2.Metadata_METRIC_TYPE_COUNTER,
+		samples: []writev2.Sample{{Value: 125, Timestamp: 3000}},
+	})))
+	require.Equal(t, []series{
+		{
+			name:    "http_requests_total",
+			typ:     writev2.Metadata_METRIC_TYPE_COUNTER,
+			samples: []writev2.Sample{{Value: 25, Timestamp: 3000, StartTimestamp: 2000}},
+		},
+	}, got)
+	require.Equal(t, 2.0, testutil.ToFloat64(tr.metrics.outOfOrderSamples))
+}
+
+func TestTransform_ConcurrentAccessValidation(t *testing.T) {
+	tr := testTransformer(t)
+
+	// Establish series state and hold its per-series mutex to simulate an
+	// in-flight request for the same series.
+	lset := labels.FromStrings(labels.MetricName, "http_requests_total", "job", "test")
+	st := tr.stateFor(lset.Hash(), time.Now())
+	st.mtx.Lock()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = tr.Transform(request(t, series{
+			name:    "http_requests_total",
+			typ:     writev2.Metadata_METRIC_TYPE_COUNTER,
+			samples: []writev2.Sample{{Value: 100, Timestamp: 1000}},
+		}))
+	}()
+
+	// Give the goroutine a moment to hit TryLock() and block on Lock(),
+	// then release the lock so it completes cleanly.
+	time.Sleep(20 * time.Millisecond)
+	st.mtx.Unlock()
+	wg.Wait()
+
+	require.Equal(t, 1.0, testutil.ToFloat64(tr.metrics.concurrentSeriesAccess))
 }
