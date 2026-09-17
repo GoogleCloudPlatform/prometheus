@@ -114,9 +114,16 @@ func run() error {
 	}
 	logger := promslog.New(&promslogConfig)
 
-	client := &http.Client{Timeout: forwardTimeout}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 100
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   forwardTimeout,
+	}
 	if useGoogleAuth {
-		rt, err := googleiam.NewRoundTripper(&googleiam.Config{CredentialsFile: credentialsFil}, nil)
+		rt, err := googleiam.NewRoundTripper(&googleiam.Config{CredentialsFile: credentialsFil}, transport)
 		if err != nil {
 			return fmt.Errorf("setting up Google credentials: %w", err)
 		}
