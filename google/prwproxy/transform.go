@@ -294,9 +294,14 @@ func needsST(ts writev2.TimeSeries) bool {
 
 // synthesize fills in start timestamps for all samples/histograms of ts that
 // don't have one, re-basing their values against the first observed sample.
-// Samples that only established the reference point are dropped.
+// Samples that only established the reference point or arrived out of order are dropped.
 func (t *Transformer) synthesize(ts writev2.TimeSeries, key uint64, now time.Time) writev2.TimeSeries {
 	st := t.stateFor(key, now)
+	if !st.mtx.TryLock() {
+		t.metrics.concurrentSeriesAccess.Inc()
+		st.mtx.Lock()
+	}
+	defer st.mtx.Unlock()
 
 	if len(ts.Samples) > 0 {
 		kept := make([]writev2.Sample, 0, len(ts.Samples))
@@ -305,6 +310,13 @@ func (t *Transformer) synthesize(ts writev2.TimeSeries, key uint64, now time.Tim
 				kept = append(kept, s)
 				continue
 			}
+			if st.hasLastTs && s.Timestamp <= st.lastTs {
+				t.metrics.outOfOrderSamples.Inc()
+				continue
+			}
+			st.lastTs = s.Timestamp
+			st.hasLastTs = true
+
 			v, start, skip := st.cache.SynthesizeFloat(s.Value, s.Timestamp)
 			if skip {
 				t.metrics.samplesDropped.Inc()
@@ -325,6 +337,13 @@ func (t *Transformer) synthesize(ts writev2.TimeSeries, key uint64, now time.Tim
 				kept = append(kept, h)
 				continue
 			}
+			if st.hasLastTs && h.Timestamp <= st.lastTs {
+				t.metrics.outOfOrderSamples.Inc()
+				continue
+			}
+			st.lastTs = h.Timestamp
+			st.hasLastTs = true
+
 			adjusted, skip := synthesizeHistogram(st.cache, h)
 			if skip {
 				t.metrics.samplesDropped.Inc()
