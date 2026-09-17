@@ -11,13 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package scrape
+// Package stsynthesis provides a stateful, per-series cache that synthesizes
+// start timestamps (ST) for cumulative metrics (counters and histograms) that
+// are exposed without one.
+//
+// It is used by the scrape loop (see scrape.Options.SynthesizeST), as well as
+// by standalone tooling that has to enrich cumulative series with an ST before
+// forwarding them to a backend that requires it (e.g. Google Cloud Monitoring).
+package stsynthesis
 
 import (
 	"github.com/prometheus/prometheus/model/histogram"
 )
 
-// stCache contains the reference point and previous value
+// Cache contains the reference point and previous value
 // information needed to synthesize start times for cumulative metrics
 // (Counters, Summaries, Histograms).
 //
@@ -31,7 +38,7 @@ import (
 // similar to what is done in the OpenTelemetry Collector's `metricstarttimeprocessor`.
 // See https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/metricstarttimeprocessor.
 // TODO(ridwanmsharif): Make this a struct usable by a go interface (see https://github.com/prometheus/prometheus/pull/18279#discussion_r3032221849).
-type stCache struct {
+type Cache struct {
 	f  *floatSynthesis
 	h  *histogramSynthesis
 	st int64
@@ -50,8 +57,8 @@ type histogramSynthesis struct {
 	starting *histogram.FloatHistogram
 }
 
-// synthesizeFloat updates the synthesis cache for a float and returns the adjusted value, synthesized start time, and whether to skip append (for first sample).
-func (c *stCache) synthesizeFloat(v float64, t int64) (float64, int64, bool) {
+// SynthesizeFloat updates the synthesis cache for a float and returns the adjusted value, synthesized start time, and whether to skip append (for first sample).
+func (c *Cache) SynthesizeFloat(v float64, t int64) (float64, int64, bool) {
 	if c.f == nil {
 		c.f = &floatSynthesis{}
 	}
@@ -79,8 +86,8 @@ func (c *stCache) synthesizeFloat(v float64, t int64) (float64, int64, bool) {
 	return adjustedValue, c.st, false
 }
 
-// synthesizeHistogram updates the synthesis state for a classic/native Integer Histogram and returns the adjusted histogram, synthesized start time, and whether to skip append (for first sample).
-func (c *stCache) synthesizeHistogram(h *histogram.Histogram, t int64) (*histogram.Histogram, int64, bool) {
+// SynthesizeHistogram updates the synthesis state for a classic/native Integer Histogram and returns the adjusted histogram, synthesized start time, and whether to skip append (for first sample).
+func (c *Cache) SynthesizeHistogram(h *histogram.Histogram, t int64) (*histogram.Histogram, int64, bool) {
 	if c.h == nil {
 		c.h = &histogramSynthesis{}
 	}
@@ -164,8 +171,8 @@ func (c *stCache) synthesizeHistogram(h *histogram.Histogram, t int64) (*histogr
 	return adjusted, c.st, false
 }
 
-// synthesizeFloatHistogram updates the synthesis state for a FloatHistogram and returns the adjusted histogram, synthesized start time, and whether to skip append (for first sample).
-func (c *stCache) synthesizeFloatHistogram(fh *histogram.FloatHistogram, t int64) (*histogram.FloatHistogram, int64, bool) {
+// SynthesizeFloatHistogram updates the synthesis state for a FloatHistogram and returns the adjusted histogram, synthesized start time, and whether to skip append (for first sample).
+func (c *Cache) SynthesizeFloatHistogram(fh *histogram.FloatHistogram, t int64) (*histogram.FloatHistogram, int64, bool) {
 	if c.h == nil {
 		c.h = &histogramSynthesis{}
 	}

@@ -51,6 +51,7 @@ import (
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/model/relabel"
+	"github.com/prometheus/prometheus/model/stsynthesis"
 	"github.com/prometheus/prometheus/model/textparse"
 	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/model/value"
@@ -823,7 +824,7 @@ type cacheEntry struct {
 	lset     labels.Labels
 
 	// st is an optional state for ST synthesis.
-	st *stCache
+	st *stsynthesis.Cache
 }
 
 type scrapeLoop struct {
