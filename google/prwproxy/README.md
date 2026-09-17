@@ -101,6 +101,26 @@ including map overhead), garbage collected `--st.stale-after` (default 10m)
 after the last sample of a series. CPU overhead is a hash map lookup and a
 subtraction per sample.
 
+## Concurrency & ordering model
+
+`prwproxy` expects a **1:1 sidecar deployment** where a single Prometheus
+instance sends remote write requests to a single `prwproxy` instance. Because
+Prometheus's remote write `QueueManager` consistently shards series by label
+hash (`hash % numShards`) and each shard goroutine sends batches sequentially
+from the WAL in timestamp order:
+
+1. **Sequential per-series delivery**: No two requests should concurrently
+   process the same series. Each series state has a mutex (`sync.Mutex`);
+   `prwproxy` checks `TryLock()` before locking to detect any unexpected
+   concurrency (incrementing `prwproxy_series_concurrent_access_total`) while
+   still serializing access to prevent data races.
+2. **Strictly increasing timestamps**: Samples for a given series must arrive
+   with strictly increasing timestamps (`Timestamp > lastTimestamp`). Any
+   out-of-order or duplicate timestamp sample is dropped and counted in
+   `prwproxy_samples_out_of_order_total`. This protects `stsynthesis.Cache` from
+   false counter-reset detections and guarantees `StartTimestamp < Timestamp`
+   for downstream Monarch ingestion.
+
 ## Prototype caveats
 
 - Series state is keyed by the labels hash, so a hash collision makes two series

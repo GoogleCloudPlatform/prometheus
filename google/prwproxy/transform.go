@@ -71,7 +71,33 @@ type TransformConfig struct {
 //     (copy_metric -> convert_gauge_to_sum("cumulative", true)).
 //
 // Transformer is stateful: it holds one stsynthesis.Cache per cumulative series
-// it had to synthesize an ST for. It is safe for concurrent use.
+// it had to synthesize an ST for.
+//
+// Concurrency and ordering model:
+//
+// prwproxy is designed to run as a 1:1 sidecar next to a single Prometheus
+// instance (single Prometheus -> single prwproxy). In Prometheus's remote write
+// QueueManager, series are consistently sharded by label hash (hash % numShards),
+// and each shard goroutine reads samples from the WAL and sends HTTP batches
+// sequentially in timestamp order.
+//
+// Consequently, for any given series (label hash):
+//  1. Requests are expected to arrive sequentially (no concurrent requests for
+//     the same series).
+//  2. Samples within and across requests are expected to arrive in strictly
+//     increasing timestamp order (Timestamp > lastTimestamp).
+//
+// Transformer validates both expectations at runtime:
+//   - Each seriesState has a mutex (mtx). In synthesize(), we first attempt
+//     mtx.TryLock(). If contention is detected (TryLock returns false), we
+//     increment prwproxy_series_concurrent_access_total and fall back to
+//     mtx.Lock() to serialize access and prevent data races on stsynthesis.Cache.
+//   - Each seriesState tracks lastTs (the timestamp of the last synthesized
+//     sample/histogram). Any sample arriving with Timestamp <= lastTs is
+//     dropped and increments prwproxy_samples_out_of_order_total. This prevents
+//     out-of-order or duplicate samples from falsely triggering counter reset
+//     heuristics in stsynthesis.Cache or producing invalid cumulative intervals
+//     where StartTimestamp >= Timestamp.
 type Transformer struct {
 	cfg TransformConfig
 
@@ -82,17 +108,22 @@ type Transformer struct {
 }
 
 type seriesState struct {
-	cache    *stsynthesis.Cache
-	lastSeen time.Time
+	mtx       sync.Mutex
+	cache     *stsynthesis.Cache
+	lastSeen  time.Time
+	lastTs    int64
+	hasLastTs bool
 }
 
 type transformMetrics struct {
-	seriesTracked        prometheus.GaugeFunc
-	unknownSeriesSplit   prometheus.Counter
-	unknownNotSplittable prometheus.Counter
-	stSynthesized        prometheus.Counter
-	samplesDropped       prometheus.Counter
-	decodeErrors         prometheus.Counter
+	seriesTracked          prometheus.GaugeFunc
+	unknownSeriesSplit     prometheus.Counter
+	unknownNotSplittable   prometheus.Counter
+	stSynthesized          prometheus.Counter
+	samplesDropped         prometheus.Counter
+	decodeErrors           prometheus.Counter
+	concurrentSeriesAccess prometheus.Counter
+	outOfOrderSamples      prometheus.Counter
 }
 
 // NewTransformer returns a Transformer. Pass a nil registerer to skip metric
@@ -134,6 +165,14 @@ func NewTransformer(cfg TransformConfig, reg prometheus.Registerer) *Transformer
 			Name: "prwproxy_series_decode_errors_total",
 			Help: "Number of series that could not be decoded and were forwarded untouched.",
 		}),
+		concurrentSeriesAccess: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "prwproxy_series_concurrent_access_total",
+			Help: "Number of times concurrent requests attempted to synthesize the same series simultaneously, violating the single-writer sequential assumption.",
+		}),
+		outOfOrderSamples: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "prwproxy_samples_out_of_order_total",
+			Help: "Number of samples dropped because their timestamp was not strictly greater than the previous sample for the same series.",
+		}),
 	}
 	if reg != nil {
 		reg.MustRegister(
@@ -143,6 +182,8 @@ func NewTransformer(cfg TransformConfig, reg prometheus.Registerer) *Transformer
 			t.metrics.stSynthesized,
 			t.metrics.samplesDropped,
 			t.metrics.decodeErrors,
+			t.metrics.concurrentSeriesAccess,
+			t.metrics.outOfOrderSamples,
 		)
 	}
 	return t
