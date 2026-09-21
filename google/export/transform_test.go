@@ -43,7 +43,7 @@ type metricMetadataMap map[string]MetricMetadata
 func testMetadataFunc(metadata metricMetadataMap) MetadataFunc {
 	return func(metric string) (MetricMetadata, bool) {
 		md, ok := metadata[metric]
-		md.Metric = metric
+		md.MetricFamily = metric
 		return md, ok
 	}
 }

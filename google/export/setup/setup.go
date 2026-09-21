@@ -99,11 +99,9 @@ func Global() *export.Exporter {
 // ExporterOptsFlags adds flags to the application, defaulting the options.
 func ExporterOptsFlags(a *kingpin.Application, opts *export.ExporterOpts) {
 	opts.DefaultUnsetFields()
-
 	a.Flag("export.disable", "Disable exporting to GCM.").
 		Default(strconv.FormatBool(opts.Disable)).
 		BoolVar(&opts.Disable)
-
 	a.Flag("export.endpoint", "GCM API endpoint to send metric data to.").
 		Default(opts.Endpoint).
 		StringVar(&opts.Endpoint)
