@@ -1423,6 +1423,35 @@ func TestSampleBuilder(t *testing.T) {
 			wantFailOnLastSample: true,
 		},
 		{
+			doc: "histogram with duplicate le labels that parse to the same float",
+			metadata: testMetadataFunc(metricMetadataMap{
+				"metric1": {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
+			}),
+			series: seriesMap{
+				1: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_sum"),
+				2: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_count"),
+				3: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_bucket", "le", "0.005"),
+				4: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_bucket", "le", "0.00500000000000000006"),
+				5: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1_bucket", "le", "+Inf"),
+			},
+			samples: [][]record.RefSample{
+				{
+					{Ref: 3, T: 1000, V: 1},
+					{Ref: 4, T: 1000, V: 1},
+					{Ref: 5, T: 1000, V: 10},
+					{Ref: 1, T: 1000, V: 8},
+					{Ref: 2, T: 1000, V: 10},
+				}, {
+					{Ref: 3, T: 2000, V: 2},
+					{Ref: 4, T: 2000, V: 2},
+					{Ref: 5, T: 2000, V: 11},
+					{Ref: 1, T: 2000, V: 9.5},
+					{Ref: 2, T: 2000, V: 11},
+				},
+			},
+			wantFailOnLastSample: true,
+		},
+		{
 			doc: "convert histogram with exemplars",
 			metadata: testMetadataFunc(metricMetadataMap{
 				"metric1":         {Type: model.MetricTypeHistogram, Help: "metric1 help text"},
