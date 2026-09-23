@@ -189,8 +189,11 @@ var (
 		ConvertClassicHistogramsToNHCB: false,
 		AlwaysScrapeClassicHistograms:  false,
 		ExtraScrapeMetrics:             boolPtr(false),
-		MetricNameValidationScheme:     model.UTF8Validation,
-		MetricNameEscapingScheme:       model.AllowUTF8,
+		// Ensure compatibility with 2.x Prometheus logic by defaulting to legacy
+		// metric name validation and underscore escaping unless explicitly configured.
+		// For more details, see the design doc at go/gmp:prom-3.13.
+		MetricNameValidationScheme:     model.LegacyValidation,
+		MetricNameEscapingScheme:       model.EscapeUnderscores,
 	}
 
 	DefaultRuntimeConfig = RuntimeConfig{

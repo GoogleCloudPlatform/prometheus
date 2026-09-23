@@ -1,2 +1,4 @@
+global:
+  metric_name_validation_scheme: utf8
 otlp:
   translation_strategy: NoUTF8EscapingWithSuffixes

@@ -5423,7 +5423,6 @@ func testScrapeReportLimit(t *testing.T, appV2 bool) {
 }
 
 func TestScrapeUTF8(t *testing.T) {
-	t.Skip("Google: UTF-8 validation is not supported in our fork.")
 	foreachAppendable(t, func(t *testing.T, appV2 bool) {
 		testScrapeUTF8(t, appV2)
 	})

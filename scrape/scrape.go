@@ -1241,12 +1241,7 @@ func newScrapeLoop(opts scrapeLoopOptions) *scrapeLoop {
 		enableCompression:  opts.sp.config.EnableCompression,
 		mrc:                opts.sp.config.MetricRelabelConfigs,
 		reportExtraMetrics: opts.sp.config.ExtraScrapeMetricsEnabled(),
-		// We do not support the UTF-8 metric name validation scheme in the initial versions
-		// of the GMP export pipeline because the downstream Google Cloud Monitoring (GCM)
-		// service requires metric names to adhere to stricter naming conventions.
-		// Enabling UTF-8 validation could cause scrapes to accept metric names that will
-		// fail ingestion in GCM. For more details, see the design doc at go/gmp:prom-3.13.
-		validationScheme: model.LegacyValidation,
+		validationScheme:   opts.sp.config.MetricNameValidationScheme,
 		// scrape.Options.
 		enableSTZeroIngestion: opts.sp.options.EnableStartTimestampZeroIngestion,
 		// parseST was added recently. Before EnableStartTimestampZeroIngestion
