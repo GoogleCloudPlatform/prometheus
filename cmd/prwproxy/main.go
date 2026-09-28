@@ -94,6 +94,8 @@ func run() error {
 		StringVar(&credentialsFil)
 	a.Flag("forward.max-body-size", "Maximum accepted compressed remote write body, in bytes.").
 		Default(strconv.FormatInt(prwproxy.DefaultMaxBodySize, 10)).Int64Var(&cfg.MaxBodySize)
+	a.Flag("forward.max-series-per-request", "Maximum number of time series in a single forwarded request. Requests with more series after the transformation (e.g. because untyped series are split in two) are forwarded as multiple requests. Defaults to the GCM limit.").
+		Default(strconv.Itoa(prwproxy.DefaultMaxSeriesPerRequest)).IntVar(&cfg.MaxSeriesPerRequest)
 
 	a.Flag("unknown.handle", "Split untyped series into a gauge and a cumulative counter stream.").
 		Default("true").BoolVar(&cfg.Transform.HandleUnknown)

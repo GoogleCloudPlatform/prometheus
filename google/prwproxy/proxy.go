@@ -50,7 +50,19 @@ const (
 
 	// DefaultMaxBodySize is the maximum accepted (compressed) request body.
 	DefaultMaxBodySize = 32 << 20 // 32 MiB.
+	// DefaultMaxSeriesPerRequest is the maximum number of time series GCM
+	// accepts in a single write request.
+	DefaultMaxSeriesPerRequest = 200
 )
+
+// writtenHeaders are the PRW2 response headers reporting how much of a request
+// was written, see
+// https://prometheus.io/docs/specs/prw/remote_write_spec_2_0/#required-written-response-headers.
+var writtenHeaders = [...]string{
+	"X-Prometheus-Remote-Write-Samples-Written",
+	"X-Prometheus-Remote-Write-Histograms-Written",
+	"X-Prometheus-Remote-Write-Exemplars-Written",
+}
 
 // Config configures the Proxy.
 type Config struct {
@@ -59,6 +71,11 @@ type Config struct {
 	ForwardURL string
 	// MaxBodySize limits the accepted compressed request body size.
 	MaxBodySize int64
+	// MaxSeriesPerRequest limits the number of time series in a single
+	// forwarded request. Transformed requests with more series (splitting
+	// untyped series can double their number) are forwarded as multiple
+	// requests.
+	MaxSeriesPerRequest int
 
 	Transform TransformConfig
 }
@@ -71,8 +88,9 @@ type Proxy struct {
 	client      *http.Client
 	transformer *Transformer
 
-	requests *prometheus.CounterVec
-	duration prometheus.Histogram
+	requests      *prometheus.CounterVec
+	splitRequests prometheus.Counter
+	duration      prometheus.Histogram
 }
 
 // New returns a ready to use Proxy. The passed client is used for the
@@ -84,6 +102,9 @@ func New(cfg Config, client *http.Client, logger *slog.Logger, reg prometheus.Re
 	}
 	if cfg.MaxBodySize <= 0 {
 		cfg.MaxBodySize = DefaultMaxBodySize
+	}
+	if cfg.MaxSeriesPerRequest <= 0 {
+		cfg.MaxSeriesPerRequest = DefaultMaxSeriesPerRequest
 	}
 	if client == nil {
 		client = http.DefaultClient
@@ -101,6 +122,10 @@ func New(cfg Config, client *http.Client, logger *slog.Logger, reg prometheus.Re
 			Name: "prwproxy_requests_total",
 			Help: "Number of remote write requests handled, by outcome.",
 		}, []string{"result"}),
+		splitRequests: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "prwproxy_requests_split_total",
+			Help: "Number of remote write requests that had more series than the per request maximum after transformation and were forwarded as multiple requests.",
+		}),
 		duration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "prwproxy_request_duration_seconds",
 			Help:    "Latency of handling (transform + forward) a remote write request.",
@@ -108,7 +133,7 @@ func New(cfg Config, client *http.Client, logger *slog.Logger, reg prometheus.Re
 		}),
 	}
 	if reg != nil {
-		reg.MustRegister(p.requests, p.duration)
+		reg.MustRegister(p.requests, p.splitRequests, p.duration)
 	}
 	return p, nil
 }
@@ -178,19 +203,28 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) (result string, co
 
 	out := p.transformer.Transform(&req)
 
-	outRaw, err := out.OptimizedMarshal(nil)
+	// Transform can grow a request past the downstream limit, so forward it in
+	// multiple parts if needed.
+	outs, err := splitRequest(out, p.cfg.MaxSeriesPerRequest)
 	if err != nil {
-		return "marshal_error", http.StatusInternalServerError, fmt.Errorf("marshalling PRW2 request: %w", err)
+		return "split_error", http.StatusBadRequest, fmt.Errorf("splitting PRW2 request: %w", err)
+	}
+	if len(outs) > 1 {
+		p.splitRequests.Inc()
+	}
+	bodies := make([][]byte, 0, len(outs))
+	for _, o := range outs {
+		outRaw, err := o.OptimizedMarshal(nil)
+		if err != nil {
+			return "marshal_error", http.StatusInternalServerError, fmt.Errorf("marshalling PRW2 request: %w", err)
+		}
+		bodies = append(bodies, snappy.Encode(nil, outRaw))
 	}
 
-	resp, err := p.forward(r.Context(), snappy.Encode(nil, outRaw))
+	resp, err := p.forwardAll(r.Context(), bodies)
 	if err != nil {
 		return "forward_error", http.StatusBadGateway, fmt.Errorf("forwarding to %v: %w", p.cfg.ForwardURL, err)
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}()
 
 	// Pass the downstream answer (including the PRW2 written-stats headers and
 	// any retriable status code) straight back to Prometheus, so its remote
@@ -198,30 +232,129 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) (result string, co
 	//
 	// NOTE(bwplotka): The written-stats refer to the transformed request, so
 	// they can exceed what Prometheus sent us. Prometheus only logs them.
-	for k, vs := range resp.Header {
+	for k, vs := range resp.header {
 		for _, v := range vs {
 			w.Header().Add(k, v)
 		}
 	}
-	w.WriteHeader(resp.StatusCode)
-	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		_, _ = w.Write(body)
-		return "forward_status_" + strconv.Itoa(resp.StatusCode), resp.StatusCode, nil
+	w.WriteHeader(resp.code)
+	if resp.code/100 != 2 {
+		_, _ = w.Write(resp.body)
+		return "forward_status_" + strconv.Itoa(resp.code), resp.code, nil
 	}
 	return "success", http.StatusOK, nil
 }
 
-func (p *Proxy) forward(ctx context.Context, body []byte) (*http.Response, error) {
+// forwardResponse is what the proxy keeps from a downstream response.
+type forwardResponse struct {
+	code   int
+	header http.Header
+	// body is only read for non-2xx responses.
+	body []byte
+}
+
+// forwardAll forwards the encoded requests one after another, so samples of a
+// series spread across them keep arriving in timestamp order. It returns the
+// response to pass back to Prometheus, which retries or drops the whole batch
+// based on it:
+//
+//   - The first failure asking to retry later (5xx or 429). The remaining
+//     requests are not sent, as Prometheus retries the whole batch (429 only
+//     with retry_on_http_429) and more load won't help the backend recover.
+//   - Otherwise the first non-retriable failure. The remaining requests are
+//     still sent, so one bad series doesn't drop unrelated data.
+//   - Otherwise the last response.
+//
+// The PRW2 written-stats headers of the returned response are replaced with
+// their sums over all downstream responses.
+func (p *Proxy) forwardAll(ctx context.Context, bodies [][]byte) (forwardResponse, error) {
+	var (
+		ret     forwardResponse
+		failed  bool
+		written writtenStats
+	)
+	for _, body := range bodies {
+		resp, err := p.forward(ctx, body)
+		if err != nil {
+			return forwardResponse{}, err
+		}
+		written.add(resp.header)
+
+		switch {
+		case resp.code/100 == 2:
+			if !failed {
+				ret = resp
+			}
+		case isRetriable(resp.code):
+			written.set(resp.header)
+			return resp, nil
+		case !failed:
+			ret, failed = resp, true
+		}
+	}
+	written.set(ret.header)
+	return ret, nil
+}
+
+func (p *Proxy) forward(ctx context.Context, body []byte) (forwardResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.cfg.ForwardURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return forwardResponse{}, err
 	}
 	req.Header.Set(contentTypeHeader, prw2ContentType)
 	req.Header.Set(contentEncodingHeader, "snappy")
 	req.Header.Set(rwVersionHeader, rwVersion2)
 	req.Header.Set("User-Agent", "prwproxy")
-	return p.client.Do(req)
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return forwardResponse{}, err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+
+	ret := forwardResponse{code: resp.StatusCode, header: resp.Header}
+	if resp.StatusCode/100 != 2 {
+		ret.body, _ = io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	}
+	return ret, nil
+}
+
+// isRetriable reports whether a failed remote write request should be retried
+// later.
+func isRetriable(code int) bool {
+	return code/100 == 5 || code == http.StatusTooManyRequests
+}
+
+// writtenStats sums the PRW2 written-stats headers over multiple responses.
+type writtenStats struct {
+	sums [len(writtenHeaders)]int
+	seen [len(writtenHeaders)]bool
+}
+
+func (s *writtenStats) add(h http.Header) {
+	for i, name := range writtenHeaders {
+		v := h.Get(name)
+		if v == "" {
+			continue
+		}
+		s.seen[i] = true
+		if n, err := strconv.Atoi(v); err == nil {
+			s.sums[i] += n
+		}
+	}
+}
+
+// set sets the sums in h. Headers no response had are left unset, so a single
+// response is passed through unchanged.
+func (s *writtenStats) set(h http.Header) {
+	for i, name := range writtenHeaders {
+		if s.seen[i] {
+			h.Set(name, strconv.Itoa(s.sums[i]))
+		}
+	}
 }
 
 func isPRW2(contentType string) bool {

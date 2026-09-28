@@ -72,6 +72,32 @@ transform/unknown-counter:
 > `--unknown.counter-suffix=""`; both streams then keep the original name and
 > only differ by type, exactly like the OTel recipe above.
 
+### 3. Request splitting
+
+GCM accepts at most 200 time series per write request. Prometheus sends one
+series per sample, so `max_samples_per_send: 200` is enough to stay under it,
+but unknown type splitting can double the number of series. For example, a
+batch of 97 untyped floats and 103 native histograms becomes 297 series, which
+GCM rejects as a whole with:
+
+```
+Request has 297 timeseries. Maximum allowed is 200.
+```
+
+Transformed requests with more than `--forward.max-series-per-request`
+(default 200) series are therefore forwarded as multiple requests, each with
+its own symbols table. They are sent one after another, so samples of the same
+series keep arriving in order. Prometheus gets back:
+
+- the first 5xx or 429 failure; the remaining requests are not sent, since
+  Prometheus retries the whole batch anyway,
+- otherwise the first other failure; the remaining requests are still sent, so
+  one bad series doesn't drop unrelated data,
+- otherwise the last success,
+
+with the `X-Prometheus-Remote-Write-*-Written` headers summed over all
+requests.
+
 ## Usage
 
 ```bash
@@ -92,7 +118,8 @@ headers are passed straight back, so Prometheus' remote write queue keeps its
 normal retry and backoff behaviour.
 
 `/metrics` exposes `prwproxy_*` metrics (tracked series, split series,
-synthesized STs, dropped samples, request outcomes and latency).
+synthesized STs, dropped samples, request outcomes, split requests and
+latency).
 
 ## Resource profile
 
@@ -131,3 +158,5 @@ from the WAL in timestamp order:
   practice).
 - PRW1 is rejected — it carries neither metadata nor start timestamps, so there
   is nothing useful to do with it.
+- When a later part of a split request fails with a 5xx or 429, Prometheus
+  retries the whole batch, re-sending the parts that were already written.
