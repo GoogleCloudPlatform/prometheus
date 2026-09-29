@@ -314,7 +314,7 @@ func (c *seriesCache) getResetAdjusted(ref storage.SeriesRef, t int64, v float64
 		// We don't know the window over which the current cumulative value was built up over.
 		// The next sample for will be considered from this point onwards.
 		return 0, 0, false
-	} else if t <= e.resetTimestamp || t <= e.lastTimestamp {
+	} else if t <= e.lastTimestamp {
 		// Otherwise if the current sample's time was already processed, drop sample.
 		// Keeping the sample is not desirable because it results in:
 		// - (at best) performing excessive API write calls with redundant data
