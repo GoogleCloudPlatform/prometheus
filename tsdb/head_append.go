@@ -867,6 +867,7 @@ func (a *headAppender) Commit() (err error) {
 		inOrderMaxt     int64 = math.MinInt64
 		ooomint         int64 = math.MaxInt64
 		ooomaxt         int64 = math.MinInt64
+		exportSamples         = a.samples[:0]
 		wblSamples      []record.RefSample
 		oooMmapMarkers  map[chunks.HeadSeriesRef]chunks.ChunkDiskMapperRef
 		oooRecords      [][]byte
@@ -995,6 +996,10 @@ func (a *headAppender) Commit() (err error) {
 			}
 		}
 
+		if ok {
+			exportSamples = append(exportSamples, s)
+		}
+
 		if chunkCreated {
 			a.head.metrics.chunks.Inc()
 			a.head.metrics.chunksCreated.Inc()
@@ -1083,6 +1088,7 @@ func (a *headAppender) Commit() (err error) {
 		}
 	}
 
+	a.samples = exportSamples
 	gcm_exportsetup.Global().Export(a.metadataFunc, a.samples, exportExemplars)
 
 	return nil

@@ -5877,3 +5877,66 @@ func (c *countSeriesLifecycleCallback) PostCreation(labels.Labels)      { c.crea
 func (c *countSeriesLifecycleCallback) PostDeletion(s map[chunks.HeadSeriesRef]labels.Labels) {
 	c.deleted.Add(int64(len(s)))
 }
+
+func TestHeadAppender_Commit_GCMExportFiltersRejectedSamples(t *testing.T) {
+	t.Run("ooo disabled", func(t *testing.T) {
+		h, _ := newTestHead(t, DefaultBlockDuration, wlog.CompressionNone, false)
+		defer func() {
+			require.NoError(t, h.Close())
+		}()
+
+		a := h.Appender(context.Background())
+		lbls := labels.FromStrings("__name__", "test_metric", "job", "test")
+		// Accepted sample at t=100.
+		ref, err := a.Append(0, lbls, 100, 1.0)
+		require.NoError(t, err)
+		// Duplicate timestamp with identical value (rejected at Commit).
+		_, err = a.Append(ref, lbls, 100, 1.0)
+		require.NoError(t, err)
+		// Duplicate timestamp with different value (rejected at Commit).
+		_, err = a.Append(ref, lbls, 100, 2.0)
+		require.NoError(t, err)
+		// Out-of-order timestamp (rejected at Commit when OOO is disabled).
+		_, err = a.Append(ref, lbls, 50, 3.0)
+		require.NoError(t, err)
+		// Accepted sample at t=200.
+		_, err = a.Append(ref, lbls, 200, 4.0)
+		require.NoError(t, err)
+
+		require.NoError(t, a.Commit())
+
+		require.Equal(t, []record.RefSample{
+			{Ref: chunks.HeadSeriesRef(ref), T: 100, V: 1.0},
+			{Ref: chunks.HeadSeriesRef(ref), T: 200, V: 4.0},
+		}, a.(*initAppender).app.(*headAppender).samples)
+	})
+
+	t.Run("ooo enabled", func(t *testing.T) {
+		h, _ := newTestHead(t, DefaultBlockDuration, wlog.CompressionNone, true)
+		defer func() {
+			require.NoError(t, h.Close())
+		}()
+
+		a := h.Appender(context.Background())
+		lbls := labels.FromStrings("__name__", "test_metric", "job", "test")
+		// Accepted in-order sample at t=100.
+		ref, err := a.Append(0, lbls, 100, 1.0)
+		require.NoError(t, err)
+		// Duplicate of in-order sample (rejected at Commit).
+		_, err = a.Append(ref, lbls, 100, 2.0)
+		require.NoError(t, err)
+		// Accepted out-of-order sample within OOO window at t=50.
+		_, err = a.Append(ref, lbls, 50, 3.0)
+		require.NoError(t, err)
+		// Duplicate of out-of-order sample at t=50 (rejected at Commit).
+		_, err = a.Append(ref, lbls, 50, 3.5)
+		require.NoError(t, err)
+
+		require.NoError(t, a.Commit())
+
+		require.Equal(t, []record.RefSample{
+			{Ref: chunks.HeadSeriesRef(ref), T: 100, V: 1.0},
+			{Ref: chunks.HeadSeriesRef(ref), T: 50, V: 3.0},
+		}, a.(*initAppender).app.(*headAppender).samples)
+	})
+}
