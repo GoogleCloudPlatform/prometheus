@@ -17,6 +17,7 @@ package export
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -2239,6 +2240,54 @@ func TestSampleBuilder(t *testing.T) {
 									BucketCounts: []int64{0, 3},
 								},
 							},
+						},
+					}},
+				},
+			},
+		},
+		{
+			doc: "drop series with label key > 100 or label value > 1024",
+			metadata: testMetadataFunc(metricMetadataMap{
+				"metric1": {Type: model.MetricTypeGauge, Help: "metric1 help text"},
+			}),
+			series: seriesMap{
+				1: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1", "long_val", strings.Repeat("x", maxLabelValueLength+1)),
+				2: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1", strings.Repeat("k", maxLabelKeyLength+1), "v1"),
+				3: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1", strings.Repeat("k", maxLabelKeyLength), strings.Repeat("x", maxLabelValueLength)),
+			},
+			samples: [][]record.RefSample{
+				{
+					{Ref: 1, T: 1000, V: 1},
+					{Ref: 2, T: 1000, V: 2},
+					{Ref: 3, T: 1000, V: 3},
+				},
+			},
+			wantSeries: []*monitoring_pb.TimeSeries{
+				{
+					Resource: &monitoredres_pb.MonitoredResource{
+						Type: "prometheus_target",
+						Labels: map[string]string{
+							"project_id": "example-project",
+							"location":   "europe",
+							"cluster":    "foo-cluster",
+							"namespace":  "",
+							"job":        "job1",
+							"instance":   "instance1",
+						},
+					},
+					Metric: &metric_pb.Metric{
+						Type:   "prometheus.googleapis.com/metric1/gauge",
+						Labels: map[string]string{strings.Repeat("k", maxLabelKeyLength): strings.Repeat("x", maxLabelValueLength)},
+					},
+					Description: "metric1 help text",
+					MetricKind:  metric_pb.MetricDescriptor_GAUGE,
+					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
+					Points: []*monitoring_pb.Point{{
+						Interval: &monitoring_pb.TimeInterval{
+							EndTime: &timestamp_pb.Timestamp{Seconds: 1},
+						},
+						Value: &monitoring_pb.TypedValue{
+							Value: &monitoring_pb.TypedValue_DoubleValue{DoubleValue: 3},
 						},
 					}},
 				},

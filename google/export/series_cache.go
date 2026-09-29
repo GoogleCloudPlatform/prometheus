@@ -357,8 +357,12 @@ const (
 	gcmMetricSuffixSummary   gcmMetricSuffix = "summary"
 )
 
-// Maximum number of labels allowed on GCM series.
-const maxLabelCount = 100
+// Limits on metric labels allowed on GCM series.
+const (
+	maxLabelCount       = 100
+	maxLabelKeyLength   = 100
+	maxLabelValueLength = 1024
+)
 
 // populate cached state for the given entry.
 // Callers are expected to c.mtx.Lock before using this method.
@@ -377,17 +381,6 @@ func (c *seriesCache) populate(ref storage.SeriesRef, entry *seriesCacheEntry, e
 	resource, metricLabels, err := extractResource(externalLabels, entry.lset)
 	if err != nil {
 		return fmt.Errorf("extracting resource for series %s failed: %w", entry.lset, err)
-	}
-
-	// Remove the __name__ label as it becomes the metric type in the GCM time series.
-	metricLabelsBuilder := labels.NewBuilder(metricLabels)
-	metricLabelsBuilder.Del(labels.MetricName)
-	metricLabels = metricLabelsBuilder.Labels()
-
-	// Drop series with too many labels.
-	// TODO: remove once field limit is lifted in the GCM API.
-	if metricLabels.Len() > maxLabelCount {
-		return fmt.Errorf("metric labels %s exceed the limit of %d", metricLabels, maxLabelCount)
 	}
 
 	var (
@@ -409,12 +402,35 @@ func (c *seriesCache) populate(ref storage.SeriesRef, entry *seriesCacheEntry, e
 			return fmt.Errorf("no metadata found for metric name %q", metricName)
 		}
 	}
+
+	// Remove the __name__ label as it becomes the metric type in the GCM time series.
+	metricLabelsBuilder := labels.NewBuilder(metricLabels)
+	metricLabelsBuilder.Del(labels.MetricName)
 	// Handle label modifications for histograms early so we don't build the label map twice.
 	// We have to remove the 'le' label which defines the bucket boundary.
 	if metadata.Type == model.MetricTypeHistogram {
-		metricLabelsBuilder := labels.NewBuilder(metricLabels)
 		metricLabelsBuilder.Del(labels.BucketLabel)
-		metricLabels = metricLabelsBuilder.Labels()
+	}
+	metricLabels = metricLabelsBuilder.Labels()
+
+	// Drop series with too many labels or labels exceeding GCM key/value length limits.
+	// TODO: remove once field limit is lifted in the GCM API.
+	if metricLabels.Len() > maxLabelCount {
+		return fmt.Errorf("metric labels %s exceed the limit of %d", metricLabels, maxLabelCount)
+	}
+	var labelErr error
+	metricLabels.Range(func(l labels.Label) {
+		if labelErr != nil {
+			return
+		}
+		if len(l.Name) > maxLabelKeyLength {
+			labelErr = fmt.Errorf("metric label key %q exceeds the length limit of %d", l.Name, maxLabelKeyLength)
+		} else if len(l.Value) > maxLabelValueLength {
+			labelErr = fmt.Errorf("metric label %q value length %d exceeds the limit of %d", l.Name, len(l.Value), maxLabelValueLength)
+		}
+	})
+	if labelErr != nil {
+		return labelErr
 	}
 
 	newSeries := func(mType, mHelp string, kind metric_pb.MetricDescriptor_MetricKind, vtype metric_pb.MetricDescriptor_ValueType) hashedSeries {

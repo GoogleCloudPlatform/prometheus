@@ -15,6 +15,8 @@
 package export
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -355,6 +357,118 @@ func TestSeriesCache_setMatchers(t *testing.T) {
 			}
 			if got, want := e2.dropped, tcase.expected2Dropped; got != want {
 				t.Errorf("Expected cache entry for series 2 dropped: %v, but cache is %v", tcase.expected2Dropped, e2)
+			}
+		})
+	}
+}
+
+func TestSeriesCache_populate_LabelLimits(t *testing.T) {
+	externalLabels := labels.FromStrings("project_id", "my-project", "location", "us-central1")
+	metricName := "test_metric"
+
+	makeLabels := func(n int, extra ...string) labels.Labels {
+		pairs := make([]string, 0, 2*n+len(extra)+2)
+		pairs = append(pairs, "__name__", metricName)
+		for i := range n {
+			pairs = append(pairs, fmt.Sprintf("k_%d", i), "v")
+		}
+		pairs = append(pairs, extra...)
+		return labels.FromStrings(pairs...)
+	}
+
+	cases := []struct {
+		name       string
+		metricType model.MetricType
+		lset       labels.Labels
+		wantErr    bool
+	}{
+		{
+			name:       "label key at max length (100)",
+			metricType: model.MetricTypeGauge,
+			lset:       labels.FromStrings("__name__", metricName, strings.Repeat("k", maxLabelKeyLength), "val"),
+			wantErr:    false,
+		},
+		{
+			name:       "label key exceeds max length (101)",
+			metricType: model.MetricTypeGauge,
+			lset:       labels.FromStrings("__name__", metricName, strings.Repeat("k", maxLabelKeyLength+1), "val"),
+			wantErr:    true,
+		},
+		{
+			name:       "label value at max length (1024)",
+			metricType: model.MetricTypeGauge,
+			lset:       labels.FromStrings("__name__", metricName, "key", strings.Repeat("v", maxLabelValueLength)),
+			wantErr:    false,
+		},
+		{
+			name:       "label value exceeds max length (1025)",
+			metricType: model.MetricTypeGauge,
+			lset:       labels.FromStrings("__name__", metricName, "key", strings.Repeat("v", maxLabelValueLength+1)),
+			wantErr:    true,
+		},
+		{
+			name:       "label count at max (100)",
+			metricType: model.MetricTypeGauge,
+			lset:       makeLabels(maxLabelCount),
+			wantErr:    false,
+		},
+		{
+			name:       "label count exceeds max (101)",
+			metricType: model.MetricTypeGauge,
+			lset:       makeLabels(maxLabelCount + 1),
+			wantErr:    true,
+		},
+		{
+			name:       "histogram with 100 metric labels plus le succeeds",
+			metricType: model.MetricTypeHistogram,
+			lset:       makeLabels(maxLabelCount, "le", "1.0"),
+			wantErr:    false,
+		},
+		{
+			name:       "histogram with 101 metric labels plus le fails",
+			metricType: model.MetricTypeHistogram,
+			lset:       makeLabels(maxLabelCount+1, "le", "1.0"),
+			wantErr:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := newSeriesCache(nil, nil, MetricTypePrefix)
+			ref := storage.SeriesRef(1)
+			cache.getLabelsByRef = func(r storage.SeriesRef) labels.Labels {
+				if r == ref {
+					return tc.lset
+				}
+				return labels.EmptyLabels()
+			}
+			mdFunc := func(m string) (MetricMetadata, bool) {
+				if m == metricName {
+					return MetricMetadata{
+						Metric: metricName,
+						Type:   tc.metricType,
+						Help:   "help",
+					}, true
+				}
+				return MetricMetadata{}, false
+			}
+
+			entry := &seriesCacheEntry{}
+			err := cache.populate(ref, entry, externalLabels, mdFunc)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error from populate, got nil")
+				}
+				if entry.valid() {
+					t.Errorf("expected entry.valid() to be false on error")
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error from populate: %v", err)
+				}
+				if !entry.valid() {
+					t.Errorf("expected entry.valid() to be true")
+				}
 			}
 		})
 	}
