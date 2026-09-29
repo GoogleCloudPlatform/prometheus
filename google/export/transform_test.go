@@ -82,8 +82,15 @@ func TestSampleBuilder(t *testing.T) {
 				123: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1", "k1", "v1"),
 			},
 			samples: [][]record.RefSample{
-				{{Ref: 123, T: 3000, V: 0.6}},
-				{{Ref: 123, T: 4000, V: math.Inf(1)}},
+				{
+					{Ref: 123, T: 3000, V: 0.6},
+					{Ref: 123, T: 3000, V: 0.7}, // duplicate timestamp
+					{Ref: 123, T: 2000, V: 0.5}, // older timestamp
+				},
+				{
+					{Ref: 123, T: 4000, V: math.Inf(1)},
+					{Ref: 123, T: 4000, V: 1.0}, // duplicate timestamp
+				},
 			},
 			wantSeries: []*monitoring_pb.TimeSeries{
 				{
@@ -234,8 +241,15 @@ func TestSampleBuilder(t *testing.T) {
 				123: labels.FromStrings("job", "job1", "instance", "instance1", "__name__", "metric1", "k1", "v1"),
 			},
 			samples: [][]record.RefSample{
-				{{Ref: 123, T: 3000, V: 0.6}},
-				{{Ref: 123, T: 4000, V: 100}},
+				{
+					{Ref: 123, T: 3000, V: 0.6},
+					{Ref: 123, T: 3000, V: 0.7}, // duplicate timestamp
+				},
+				{
+					{Ref: 123, T: 4000, V: 100},
+					{Ref: 123, T: 4000, V: 50},  // duplicate timestamp with lower value
+					{Ref: 123, T: 3500, V: 110}, // older timestamp
+				},
 			},
 			//
 			wantSeries: []*monitoring_pb.TimeSeries{
@@ -446,6 +460,8 @@ func TestSampleBuilder(t *testing.T) {
 					{Ref: 123, T: 2000, V: 5.5}, // duplicate
 				}, {
 					{Ref: 123, T: 4000, V: 9},
+					{Ref: 123, T: 4000, V: 8},  // duplicate with lower value (must not trigger false reset)
+					{Ref: 123, T: 4000, V: 10}, // duplicate with higher value
 				}, {
 					{Ref: 123, T: 5000, V: 7},
 					{Ref: 123, T: 5000, V: 7}, // duplicate
@@ -454,7 +470,8 @@ func TestSampleBuilder(t *testing.T) {
 			wantSeries: []*monitoring_pb.TimeSeries{
 				// First sample skipped to initialize reset handling.
 				// Second sample was a duplicate of the reset value, should be dropped.
-				// Subsequent samples are relative to the initial sample in value and timestamp.
+				// Subsequent samples are relative to the initial sample in value and timestamp,
+				// and any subsequent duplicate timestamps are dropped.
 				{
 					Resource: &monitoredres_pb.MonitoredResource{
 						Type: "prometheus_target",
@@ -486,36 +503,6 @@ func TestSampleBuilder(t *testing.T) {
 				},
 				// Reset in the Prometheus series. Start timestamp is set to 1ms
 				// before end timestamp.
-				{
-					Resource: &monitoredres_pb.MonitoredResource{
-						Type: "prometheus_target",
-						Labels: map[string]string{
-							"location":   "europe",
-							"project_id": "example-project",
-							"cluster":    "foo-cluster",
-							"namespace":  "",
-							"job":        "job1",
-							"instance":   "instance1",
-						},
-					},
-					Metric: &metric_pb.Metric{
-						Type:   "prometheus.googleapis.com/metric1_total/counter",
-						Labels: map[string]string{"k1": "v1"},
-					},
-					Description: "metric1_total help text",
-					MetricKind:  metric_pb.MetricDescriptor_CUMULATIVE,
-					ValueType:   metric_pb.MetricDescriptor_DOUBLE,
-					Points: []*monitoring_pb.Point{{
-						Interval: &monitoring_pb.TimeInterval{
-							StartTime: &timestamp_pb.Timestamp{Seconds: 4, Nanos: 999000000},
-							EndTime:   &timestamp_pb.Timestamp{Seconds: 5},
-						},
-						Value: &monitoring_pb.TypedValue{
-							Value: &monitoring_pb.TypedValue_DoubleValue{DoubleValue: 7},
-						},
-					}},
-				},
-				// subsequent duplicates still get through.
 				{
 					Resource: &monitoredres_pb.MonitoredResource{
 						Type: "prometheus_target",

@@ -38,9 +38,9 @@ import (
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/record"
 	"github.com/stretchr/testify/require"
+	metric_pb "google.golang.org/genproto/googleapis/api/metric"
 	monitoredres_pb "google.golang.org/genproto/googleapis/api/monitoredres"
 	timestamp_pb "google.golang.org/protobuf/types/known/timestamppb"
-	metric_pb "google.golang.org/genproto/googleapis/api/metric"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -479,10 +479,12 @@ func TestApplyConfig(t *testing.T) {
 	e.SetLabelsByIDFunc(func(ref storage.SeriesRef) labels.Labels {
 		return labels.FromStrings("location", "us-central1-c", "ref", fmt.Sprint(ref))
 	})
+	var ts int64
 	exportSamplesFn := func() {
-		e.Export(nil, []record.RefSample{{Ref: 1, T: int64(0), V: float64(0)}}, nil)
-		e.Export(nil, []record.RefSample{{Ref: 2, T: int64(0), V: float64(0)}}, nil)
-		e.Export(nil, []record.RefSample{{Ref: 3, T: int64(0), V: float64(0)}}, nil)
+		ts += 1000
+		e.Export(nil, []record.RefSample{{Ref: 1, T: ts, V: float64(0)}}, nil)
+		e.Export(nil, []record.RefSample{{Ref: 2, T: ts, V: float64(0)}}, nil)
+		e.Export(nil, []record.RefSample{{Ref: 3, T: ts, V: float64(0)}}, nil)
 	}
 
 	metricServer := testMetricService{}

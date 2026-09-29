@@ -120,18 +120,20 @@ func (b *sampleBuilder) next(metadata MetadataFunc, externalLabels labels.Labels
 	// based on the type determined in the series cache.
 	// If both are set, we double-write the series as a gauge and a cumulative.
 	if g := entry.protos.gauge; g.proto != nil {
-		//nolint:govet
-		ts := *g.proto
+		if b.series.updateTimestamp(entry, sample.T) {
+			//nolint:govet
+			ts := *g.proto
 
-		ts.Points = []*monitoring_pb.Point{{
-			Interval: &monitoring_pb.TimeInterval{
-				EndTime: getTimestamp(sample.T),
-			},
-			Value: &monitoring_pb.TypedValue{
-				Value: &monitoring_pb.TypedValue_DoubleValue{DoubleValue: sample.V},
-			},
-		}}
-		result = append(result, hashedSeries{hash: g.hash, proto: &ts})
+			ts.Points = []*monitoring_pb.Point{{
+				Interval: &monitoring_pb.TimeInterval{
+					EndTime: getTimestamp(sample.T),
+				},
+				Value: &monitoring_pb.TypedValue{
+					Value: &monitoring_pb.TypedValue_DoubleValue{DoubleValue: sample.V},
+				},
+			}}
+			result = append(result, hashedSeries{hash: g.hash, proto: &ts})
+		}
 	}
 	if c := entry.protos.cumulative; c.proto != nil {
 		if entry.metadata.Type == model.MetricTypeHistogram {

@@ -359,3 +359,93 @@ func TestSeriesCache_setMatchers(t *testing.T) {
 		})
 	}
 }
+
+func TestSeriesCache_updateTimestamp(t *testing.T) {
+	cache := newSeriesCache(nil, nil, MetricTypePrefix)
+	cache.getLabelsByRef = func(r storage.SeriesRef) labels.Labels {
+		return labels.FromStrings("__name__", "test_gauge", "job", "j", "instance", "i")
+	}
+	externalLabels := labels.FromStrings("project_id", "p", "location", "l")
+	mdFunc := func(m string) (MetricMetadata, bool) {
+		return MetricMetadata{Metric: m, Type: model.MetricTypeGauge}, true
+	}
+
+	entry, ok := cache.get(record.RefSample{Ref: 1, T: 1000, V: 1}, externalLabels, mdFunc)
+	if !ok {
+		t.Fatal("expected series cache entry to be populated")
+	}
+
+	// First sample at T=1000 succeeds.
+	if !cache.updateTimestamp(entry, 1000) {
+		t.Error("expected updateTimestamp(1000) to succeed")
+	}
+	// Duplicate timestamp T=1000 is rejected.
+	if cache.updateTimestamp(entry, 1000) {
+		t.Error("expected duplicate updateTimestamp(1000) to be rejected")
+	}
+	// Out-of-order timestamp T=500 is rejected.
+	if cache.updateTimestamp(entry, 500) {
+		t.Error("expected out-of-order updateTimestamp(500) to be rejected")
+	}
+	// Strictly newer timestamp T=2000 succeeds.
+	if !cache.updateTimestamp(entry, 2000) {
+		t.Error("expected updateTimestamp(2000) to succeed")
+	}
+	// Negative timestamp initialization check: new series at T=0 should succeed.
+	entryZero, ok := cache.get(record.RefSample{Ref: 2, T: 0, V: 1}, externalLabels, mdFunc)
+	if !ok {
+		t.Fatal("expected series cache entry for ref 2 to be populated")
+	}
+	if !cache.updateTimestamp(entryZero, 0) {
+		t.Error("expected first updateTimestamp(0) to succeed")
+	}
+	if cache.updateTimestamp(entryZero, 0) {
+		t.Error("expected second updateTimestamp(0) to be rejected")
+	}
+}
+
+func TestSeriesCache_getResetAdjusted(t *testing.T) {
+	cache := newSeriesCache(nil, nil, MetricTypePrefix)
+	ref := storage.SeriesRef(1)
+	cache.getLabelsByRef = func(r storage.SeriesRef) labels.Labels {
+		return labels.FromStrings("__name__", "test_counter_total", "job", "j", "instance", "i")
+	}
+	externalLabels := labels.FromStrings("project_id", "p", "location", "l")
+	mdFunc := func(m string) (MetricMetadata, bool) {
+		return MetricMetadata{Metric: m, Type: model.MetricTypeCounter}, true
+	}
+
+	if _, ok := cache.get(record.RefSample{Ref: 1, T: 1000, V: 10}, externalLabels, mdFunc); !ok {
+		t.Fatal("expected series cache entry to be populated")
+	}
+
+	// First sample initializes resetTimestamp=1000, lastTimestamp=1000, returns false.
+	if _, _, ok := cache.getResetAdjusted(ref, 1000, 10); ok {
+		t.Error("expected first sample to initialize reset and return false")
+	}
+	// Duplicate of initial sample at T=1000 is rejected.
+	if _, _, ok := cache.getResetAdjusted(ref, 1000, 10); ok {
+		t.Error("expected duplicate of initial sample to be rejected")
+	}
+
+	// Second sample at T=2000, V=15 succeeds with resetTimestamp=1000, v=5.
+	rt, v, ok := cache.getResetAdjusted(ref, 2000, 15)
+	if !ok || rt != 1000 || v != 5 {
+		t.Errorf("expected (1000, 5, true), got (%d, %f, %v)", rt, v, ok)
+	}
+
+	// Intra-scrape duplicate at T=2000 with lower value (V=12) must be rejected and NOT trigger a false reset.
+	if _, _, ok := cache.getResetAdjusted(ref, 2000, 12); ok {
+		t.Error("expected duplicate timestamp with lower value to be rejected")
+	}
+	// Out-of-order sample at T=1500 must be rejected.
+	if _, _, ok := cache.getResetAdjusted(ref, 1500, 16); ok {
+		t.Error("expected out-of-order timestamp to be rejected")
+	}
+
+	// Next valid sample at T=3000, V=18 should still use original resetTimestamp=1000, resetValue=10 -> v=8.
+	rt, v, ok = cache.getResetAdjusted(ref, 3000, 18)
+	if !ok || rt != 1000 || v != 8 {
+		t.Errorf("expected (1000, 8, true) after rejected duplicate, got (%d, %f, %v)", rt, v, ok)
+	}
+}

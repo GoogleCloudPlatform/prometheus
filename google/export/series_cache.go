@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"math"
 	"math/rand"
 	"strings"
 	"sync"
@@ -91,6 +92,8 @@ type seriesCacheEntry struct {
 	resetValue     float64
 	lastValue      float64
 	resetTimestamp int64
+	// Last sample timestamp processed for this series.
+	lastTimestamp int64
 }
 
 type hashedSeries struct {
@@ -259,7 +262,9 @@ func (c *seriesCache) get(s record.RefSample, externalLabels labels.Labels, meta
 
 	e, ok := c.entries[ref]
 	if !ok {
-		e = &seriesCacheEntry{}
+		e = &seriesCacheEntry{
+			lastTimestamp: math.MinInt64,
+		}
 		c.entries[ref] = e
 	}
 
@@ -273,6 +278,20 @@ func (c *seriesCache) get(s record.RefSample, externalLabels labels.Labels, meta
 	// Store millisecond sample timestamp in seconds.
 	e.lastUsed = s.T / 1000
 	return e, e.valid()
+}
+
+// updateTimestamp checks and updates the last processed timestamp for a gauge series.
+// If false is returned, the sample timestamp was already processed and the sample should be dropped.
+func (c *seriesCache) updateTimestamp(e *seriesCacheEntry, t int64) bool {
+	if e == nil || t <= e.lastTimestamp {
+		return false
+	}
+	// For untyped metrics (where both gauge and cumulative protos are populated),
+	// getResetAdjusted will update lastTimestamp after processing the cumulative point.
+	if e.protos.cumulative.proto == nil {
+		e.lastTimestamp = t
+	}
+	return true
 }
 
 // getResetAdjusted takes a sample for a referenced series and returns
@@ -290,20 +309,17 @@ func (c *seriesCache) getResetAdjusted(ref storage.SeriesRef, t int64, v float64
 	if !hasReset {
 		e.resetTimestamp = t
 		e.resetValue = v
+		e.lastTimestamp = t
 		// If we just initialized the reset timestamp, this sample should be skipped.
 		// We don't know the window over which the current cumulative value was built up over.
 		// The next sample for will be considered from this point onwards.
 		return 0, 0, false
-	} else if t <= e.resetTimestamp {
+	} else if t <= e.resetTimestamp || t <= e.lastTimestamp {
 		// Otherwise if the current sample's time was already processed, drop sample.
 		// Keeping the sample is not desirable because it results in:
 		// - (at best) performing excessive API write calls with redundant data
 		// - sending API bad requests in the form of zero-ranged sample intervals
 		// - attempting to update a previous point, resulting in an error response.
-		//
-		// Note: this will only omit duplicates of the initial "reset" sample.
-		// Omitting duplicates of all incoming samples would require
-		// more sophisticated state management.
 		return 0, 0, false
 	}
 	if v < e.lastValue {
@@ -315,6 +331,7 @@ func (c *seriesCache) getResetAdjusted(ref storage.SeriesRef, t int64, v float64
 		e.resetTimestamp = t - 1
 	}
 	e.lastValue = v
+	e.lastTimestamp = t
 
 	return e.resetTimestamp, v - e.resetValue, true
 }
