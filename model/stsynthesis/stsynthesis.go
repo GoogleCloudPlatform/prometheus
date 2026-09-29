@@ -57,6 +57,23 @@ type histogramSynthesis struct {
 	starting *histogram.FloatHistogram
 }
 
+// Clone returns an independent copy of c.
+func (c *Cache) Clone() *Cache {
+	if c == nil {
+		return nil
+	}
+	out := &Cache{st: c.st}
+	if c.f != nil {
+		f := *c.f
+		out.f = &f
+	}
+	if c.h != nil {
+		h := *c.h
+		out.h = &h
+	}
+	return out
+}
+
 // SynthesizeFloat updates the synthesis cache for a float and returns the adjusted value, synthesized start time, and whether to skip append (for first sample).
 func (c *Cache) SynthesizeFloat(v float64, t int64) (float64, int64, bool) {
 	if c.f == nil {

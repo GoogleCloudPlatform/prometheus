@@ -14,6 +14,7 @@
 package prwproxy
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -192,11 +193,60 @@ func NewTransformer(cfg TransformConfig, reg prometheus.Registerer) *Transformer
 // Transform returns a new request with the transformations described on
 // Transformer applied. The input request is not modified.
 func (t *Transformer) Transform(req *writev2.Request) *writev2.Request {
+	out, commits := t.transform(req)
+	t.commit(commits)
+	return out
+}
+
+// seriesCommit holds a staged per-series synthesis state update produced by
+// transform, to be committed once the request carrying the series has been
+// accepted downstream (or rejected as non-retriable).
+type seriesCommit struct {
+	// outIdx is the index in the transformed Request.Timeseries that this
+	// update belongs to, or math.MaxInt if all samples of the series were
+	// dropped as the initial reference point.
+	outIdx         int
+	st             *seriesState
+	cache          *stsynthesis.Cache
+	lastTs         int64
+	hasLastTs      bool
+	unknownSplit   bool
+	stSynthesized  int
+	samplesDropped int
+}
+
+func (t *Transformer) commit(commits []seriesCommit) {
+	for i := range commits {
+		c := &commits[i]
+		c.st.mtx.Lock()
+		if !c.st.hasLastTs || c.lastTs > c.st.lastTs {
+			c.st.cache = c.cache
+			c.st.lastTs = c.lastTs
+			c.st.hasLastTs = c.hasLastTs
+		}
+		c.st.mtx.Unlock()
+
+		if c.unknownSplit {
+			t.metrics.unknownSeriesSplit.Inc()
+		}
+		if c.stSynthesized > 0 {
+			t.metrics.stSynthesized.Add(float64(c.stSynthesized))
+		}
+		if c.samplesDropped > 0 {
+			t.metrics.samplesDropped.Add(float64(c.samplesDropped))
+		}
+	}
+}
+
+func (t *Transformer) transform(req *writev2.Request) (*writev2.Request, []seriesCommit) {
 	var (
-		syms = newSymbolAppender(req.Symbols)
-		out  = make([]writev2.TimeSeries, 0, len(req.Timeseries))
-		b    = labels.NewScratchBuilder(0)
-		now  = time.Now()
+		syms     = newSymbolAppender(req.Symbols)
+		out      = make([]writev2.TimeSeries, 0, len(req.Timeseries))
+		commits  = make([]seriesCommit, 0, len(req.Timeseries))
+		deferred []seriesCommit
+		staged   = make(map[uint64]*seriesCommit, len(req.Timeseries))
+		b        = labels.NewScratchBuilder(0)
+		now      = time.Now()
 	)
 
 	for _, ts := range req.Timeseries {
@@ -213,7 +263,12 @@ func (t *Transformer) Transform(req *writev2.Request) *writev2.Request {
 				out = append(out, ts)
 				continue
 			}
-			out = t.splitUnknown(out, ts, lset, syms, now)
+			var c *seriesCommit
+			out, c = t.splitUnknown(out, ts, lset, syms, now, staged)
+			if c != nil {
+				c.outIdx = max(0, len(out)-1)
+				commits = append(commits, *c)
+			}
 
 		case writev2.Metadata_METRIC_TYPE_COUNTER, writev2.Metadata_METRIC_TYPE_HISTOGRAM:
 			// Avoid allocating (and keeping) per-series state for the common case
@@ -222,19 +277,29 @@ func (t *Transformer) Transform(req *writev2.Request) *writev2.Request {
 				out = append(out, ts)
 				continue
 			}
-			ts = t.synthesize(ts, lset.Hash(), now)
+			var c *seriesCommit
+			ts, c = t.synthesize(ts, nil, lset.Hash(), now, staged)
 			if len(ts.Samples) == 0 && len(ts.Histograms) == 0 {
 				// Everything was the first (reference) observation, nothing to send.
+				if c != nil {
+					c.outIdx = math.MaxInt
+					deferred = append(deferred, *c)
+				}
 				continue
 			}
 			out = append(out, ts)
+			if c != nil {
+				c.outIdx = len(out) - 1
+				commits = append(commits, *c)
+			}
 
 		default:
 			out = append(out, ts)
 		}
 	}
 
-	return &writev2.Request{Symbols: syms.symbols, Timeseries: out}
+	commits = append(commits, deferred...)
+	return &writev2.Request{Symbols: syms.symbols, Timeseries: out}, commits
 }
 
 // splitUnknown implements the equivalent of the OpenTelemetry Collector recipe:
@@ -244,15 +309,14 @@ func (t *Transformer) Transform(req *writev2.Request) *writev2.Request {
 //
 // The gauge stream keeps raw values, the counter stream is re-based against a
 // synthesized start timestamp so it is a valid Monarch cumulative.
-func (t *Transformer) splitUnknown(out []writev2.TimeSeries, ts writev2.TimeSeries, lset labels.Labels, syms *symbolAppender, now time.Time) []writev2.TimeSeries {
+func (t *Transformer) splitUnknown(out []writev2.TimeSeries, ts writev2.TimeSeries, lset labels.Labels, syms *symbolAppender, now time.Time, staged map[uint64]*seriesCommit) ([]writev2.TimeSeries, *seriesCommit) {
 	name := lset.Get(labels.MetricName)
 	// Native histograms are never untyped in practice, and there is no meaningful
 	// "gauge" representation for them here, so don't touch them.
 	if name == "" || len(ts.Histograms) > 0 {
 		t.metrics.unknownNotSplittable.Inc()
-		return append(out, ts)
+		return append(out, ts), nil
 	}
-	t.metrics.unknownSeriesSplit.Inc()
 
 	// 1. Gauge stream: raw values, no ST.
 	gauge := cloneSeries(ts)
@@ -264,17 +328,25 @@ func (t *Transformer) splitUnknown(out []writev2.TimeSeries, ts writev2.TimeSeri
 		gauge.Samples[i].StartTimestamp = 0
 	}
 	renameSeries(&gauge, syms, name+t.cfg.UnknownGaugeSuffix)
-	out = append(out, gauge)
 
 	// 2. Cumulative counter stream, with a synthesized ST.
 	counter := cloneSeries(ts)
 	counter.Metadata.Type = writev2.Metadata_METRIC_TYPE_COUNTER
+	for i := range counter.Samples {
+		counter.Samples[i].StartTimestamp = 0
+	}
 	renameSeries(&counter, syms, name+t.cfg.UnknownCounterSuffix)
-	counter = t.synthesize(counter, lset.Hash(), now)
+	counter, c := t.synthesize(counter, &gauge.Samples, lset.Hash(), now, staged)
+	if len(gauge.Samples) > 0 {
+		out = append(out, gauge)
+	}
 	if len(counter.Samples) > 0 {
 		out = append(out, counter)
 	}
-	return out
+	if c != nil {
+		c.unknownSplit = true
+	}
+	return out, c
 }
 
 // needsST reports whether any sample of ts is missing a start timestamp.
@@ -294,14 +366,41 @@ func needsST(ts writev2.TimeSeries) bool {
 
 // synthesize fills in start timestamps for all samples/histograms of ts that
 // don't have one, re-basing their values against the first observed sample.
-// Samples that only established the reference point or arrived out of order are dropped.
-func (t *Transformer) synthesize(ts writev2.TimeSeries, key uint64, now time.Time) writev2.TimeSeries {
+// Samples that only established the reference point or arrived out of order are
+// dropped. If inOrderRaw is non-nil, it is populated with the raw (un-rebased,
+// StartTimestamp=0) samples that arrived in order.
+func (t *Transformer) synthesize(ts writev2.TimeSeries, inOrderRaw *[]writev2.Sample, key uint64, now time.Time, staged map[uint64]*seriesCommit) (writev2.TimeSeries, *seriesCommit) {
 	st := t.stateFor(key, now)
 	if !st.mtx.TryLock() {
 		t.metrics.concurrentSeriesAccess.Inc()
 		st.mtx.Lock()
 	}
 	defer st.mtx.Unlock()
+
+	var (
+		cache     *stsynthesis.Cache
+		lastTs    int64
+		hasLastTs bool
+	)
+	if prev, ok := staged[key]; ok {
+		cache = prev.cache.Clone()
+		lastTs = prev.lastTs
+		hasLastTs = prev.hasLastTs
+	} else {
+		cache = st.cache.Clone()
+		lastTs = st.lastTs
+		hasLastTs = st.hasLastTs
+	}
+
+	var (
+		changed        bool
+		stSynthesized  int
+		samplesDropped int
+	)
+
+	if inOrderRaw != nil {
+		*inOrderRaw = (*inOrderRaw)[:0]
+	}
 
 	if len(ts.Samples) > 0 {
 		kept := make([]writev2.Sample, 0, len(ts.Samples))
@@ -310,21 +409,25 @@ func (t *Transformer) synthesize(ts writev2.TimeSeries, key uint64, now time.Tim
 				kept = append(kept, s)
 				continue
 			}
-			if st.hasLastTs && s.Timestamp <= st.lastTs {
+			if hasLastTs && s.Timestamp <= lastTs {
 				t.metrics.outOfOrderSamples.Inc()
 				continue
 			}
-			st.lastTs = s.Timestamp
-			st.hasLastTs = true
+			lastTs = s.Timestamp
+			hasLastTs = true
+			changed = true
+			if inOrderRaw != nil {
+				*inOrderRaw = append(*inOrderRaw, s)
+			}
 
-			v, start, skip := st.cache.SynthesizeFloat(s.Value, s.Timestamp)
+			v, start, skip := cache.SynthesizeFloat(s.Value, s.Timestamp)
 			if skip {
-				t.metrics.samplesDropped.Inc()
+				samplesDropped++
 				continue
 			}
 			s.Value = v
 			s.StartTimestamp = start
-			t.metrics.stSynthesized.Inc()
+			stSynthesized++
 			kept = append(kept, s)
 		}
 		ts.Samples = kept
@@ -337,24 +440,38 @@ func (t *Transformer) synthesize(ts writev2.TimeSeries, key uint64, now time.Tim
 				kept = append(kept, h)
 				continue
 			}
-			if st.hasLastTs && h.Timestamp <= st.lastTs {
+			if hasLastTs && h.Timestamp <= lastTs {
 				t.metrics.outOfOrderSamples.Inc()
 				continue
 			}
-			st.lastTs = h.Timestamp
-			st.hasLastTs = true
+			lastTs = h.Timestamp
+			hasLastTs = true
+			changed = true
 
-			adjusted, skip := synthesizeHistogram(st.cache, h)
+			adjusted, skip := synthesizeHistogram(cache, h)
 			if skip {
-				t.metrics.samplesDropped.Inc()
+				samplesDropped++
 				continue
 			}
-			t.metrics.stSynthesized.Inc()
+			stSynthesized++
 			kept = append(kept, adjusted)
 		}
 		ts.Histograms = kept
 	}
-	return ts
+
+	if !changed {
+		return ts, nil
+	}
+	c := &seriesCommit{
+		st:             st,
+		cache:          cache,
+		lastTs:         lastTs,
+		hasLastTs:      hasLastTs,
+		stSynthesized:  stSynthesized,
+		samplesDropped: samplesDropped,
+	}
+	staged[key] = c
+	return ts, c
 }
 
 func synthesizeHistogram(c *stsynthesis.Cache, h writev2.Histogram) (writev2.Histogram, bool) {

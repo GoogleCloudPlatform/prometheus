@@ -330,6 +330,115 @@ func TestProxy_SplitRequestFailures(t *testing.T) {
 	}
 }
 
+func TestProxy_TransactionalStateOnRetry(t *testing.T) {
+	t.Run("retriable failure does not commit state", func(t *testing.T) {
+		backend := newTestBackend(t)
+		// Request 0 (t=1000, attempt 1): 503.
+		// Request 1 (t=1000, retry):     204 -> commits anchor ST=1000.
+		// Request 2 (t=2000, attempt 1): 429 -> must not commit t=2000 or reset.
+		// Request 3 (t=2000, retry):     204 -> synthesizes against ST=1000.
+		backend.statuses = []int{
+			http.StatusServiceUnavailable,
+			http.StatusNoContent,
+			http.StatusTooManyRequests,
+			http.StatusNoContent,
+		}
+		p := newTestProxy(t, backend.URL)
+
+		batch := func(v float64, ts int64) *writev2.Request {
+			return request(t,
+				series{name: "mysql_slow_queries", typ: writev2.Metadata_METRIC_TYPE_UNSPECIFIED, samples: []writev2.Sample{{Value: v, Timestamp: ts}}},
+				series{name: "http_requests_total", typ: writev2.Metadata_METRIC_TYPE_COUNTER, samples: []writev2.Sample{{Value: v * 10, Timestamp: ts}}},
+			)
+		}
+
+		require.Equal(t, http.StatusServiceUnavailable, post(t, p, batch(10, 1000)).Code)
+		require.Equal(t, http.StatusNoContent, post(t, p, batch(10, 1000)).Code)
+
+		require.Equal(t, http.StatusTooManyRequests, post(t, p, batch(15, 2000)).Code)
+		require.Equal(t, http.StatusNoContent, post(t, p, batch(15, 2000)).Code)
+
+		require.Equal(t, 0.0, testutil.ToFloat64(p.transformer.metrics.outOfOrderSamples))
+		require.Equal(t, []series{
+			{name: "mysql_slow_queries/unknown", typ: writev2.Metadata_METRIC_TYPE_GAUGE, samples: []writev2.Sample{{Value: 15, Timestamp: 2000}}},
+			{name: "mysql_slow_queries/unknown:counter", typ: writev2.Metadata_METRIC_TYPE_COUNTER, samples: []writev2.Sample{{Value: 5, Timestamp: 2000, StartTimestamp: 1000}}},
+			{name: "http_requests_total", typ: writev2.Metadata_METRIC_TYPE_COUNTER, samples: []writev2.Sample{{Value: 50, Timestamp: 2000, StartTimestamp: 1000}}},
+		}, decode(t, backend.received[3]))
+	})
+
+	t.Run("partial failure across split chunks commits only succeeded chunks", func(t *testing.T) {
+		backend := newTestBackend(t)
+		// Request 0 (t=1000): 2 gauges fit into 1 chunk -> 204.
+		// Request 1 (t=2000, chunk 0: m1 gauge+counter): 204 -> commits m1.
+		// Request 2 (t=2000, chunk 1: m2 gauge+counter): 503 -> m2 and c1 (chunk 2, unsent) stay uncommitted.
+		// Request 3 (t=2000 retry, chunk 0: m2 gauge+counter): 204 -> m1 was already committed so it is skipped.
+		// Request 4 (t=2000 retry, chunk 1: c1): 204.
+		backend.statuses = []int{
+			http.StatusNoContent,
+			http.StatusNoContent,
+			http.StatusServiceUnavailable,
+			http.StatusNoContent,
+			http.StatusNoContent,
+		}
+		p := newTestProxy(t, backend.URL, func(c *Config) { c.MaxSeriesPerRequest = 2 })
+
+		batch := func(v float64, ts int64) *writev2.Request {
+			return request(t,
+				series{name: "m1", typ: writev2.Metadata_METRIC_TYPE_UNSPECIFIED, samples: []writev2.Sample{{Value: v, Timestamp: ts}}},
+				series{name: "m2", typ: writev2.Metadata_METRIC_TYPE_UNSPECIFIED, samples: []writev2.Sample{{Value: v * 2, Timestamp: ts}}},
+				series{name: "c1", typ: writev2.Metadata_METRIC_TYPE_COUNTER, samples: []writev2.Sample{{Value: v * 10, Timestamp: ts}}},
+			)
+		}
+
+		// First scrape establishes ST=1000 for all three series.
+		require.Equal(t, http.StatusNoContent, post(t, p, batch(10, 1000)).Code)
+		require.Len(t, backend.received, 1)
+
+		// Second scrape: chunk 0 (m1) succeeds, chunk 1 (m2) fails with 503, chunk 2 (c1) is not sent.
+		require.Equal(t, http.StatusServiceUnavailable, post(t, p, batch(15, 2000)).Code)
+		require.Len(t, backend.received, 3)
+
+		// Prometheus retries the whole batch: m1 was already committed in chunk 0,
+		// so only m2 and c1 are synthesized and forwarded.
+		w := post(t, p, batch(15, 2000))
+		require.Equal(t, http.StatusNoContent, w.Code)
+		require.Len(t, backend.received, 5)
+		require.Equal(t, "3", w.Header().Get("X-Prometheus-Remote-Write-Samples-Written"))
+
+		require.Equal(t, []series{
+			{name: "m2/unknown", typ: writev2.Metadata_METRIC_TYPE_GAUGE, samples: []writev2.Sample{{Value: 30, Timestamp: 2000}}},
+			{name: "m2/unknown:counter", typ: writev2.Metadata_METRIC_TYPE_COUNTER, samples: []writev2.Sample{{Value: 10, Timestamp: 2000, StartTimestamp: 1000}}},
+		}, decode(t, backend.received[3]))
+		require.Equal(t, []series{
+			{name: "c1", typ: writev2.Metadata_METRIC_TYPE_COUNTER, samples: []writev2.Sample{{Value: 50, Timestamp: 2000, StartTimestamp: 1000}}},
+		}, decode(t, backend.received[4]))
+	})
+
+	t.Run("non-retriable failure commits state", func(t *testing.T) {
+		backend := newTestBackend(t)
+		backend.statuses = []int{http.StatusBadRequest, http.StatusNoContent}
+		p := newTestProxy(t, backend.URL)
+
+		// First scrape returns 400; Prometheus drops the batch and moves on, so
+		// the anchor at t=1000 must still be committed.
+		require.Equal(t, http.StatusBadRequest, post(t, p, request(t, series{
+			name:    "http_requests_total",
+			typ:     writev2.Metadata_METRIC_TYPE_COUNTER,
+			samples: []writev2.Sample{{Value: 100, Timestamp: 1000}},
+		})).Code)
+
+		require.Equal(t, http.StatusNoContent, post(t, p, request(t, series{
+			name:    "http_requests_total",
+			typ:     writev2.Metadata_METRIC_TYPE_COUNTER,
+			samples: []writev2.Sample{{Value: 130, Timestamp: 2000}},
+		})).Code)
+
+		require.Equal(t, []series{
+			{name: "http_requests_total", typ: writev2.Metadata_METRIC_TYPE_COUNTER, samples: []writev2.Sample{{Value: 30, Timestamp: 2000, StartTimestamp: 1000}}},
+		}, decode(t, backend.received[1]))
+	})
+}
+
 func TestProxy_RejectsNonPRW2(t *testing.T) {
 	p := newTestProxy(t, "http://localhost:1/write")
 

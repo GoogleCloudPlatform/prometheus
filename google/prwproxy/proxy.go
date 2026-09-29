@@ -201,7 +201,7 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) (result string, co
 		return "unmarshal_error", http.StatusBadRequest, fmt.Errorf("unmarshalling PRW2 request: %w", err)
 	}
 
-	out := p.transformer.Transform(&req)
+	out, commits := p.transformer.transform(&req)
 
 	// Transform can grow a request past the downstream limit, so forward it in
 	// multiple parts if needed.
@@ -212,16 +212,31 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) (result string, co
 	if len(outs) > 1 {
 		p.splitRequests.Inc()
 	}
-	bodies := make([][]byte, 0, len(outs))
-	for _, o := range outs {
+	chunks := make([]forwardChunk, 0, len(outs))
+	var endIdx int
+	for i, o := range outs {
 		outRaw, err := o.OptimizedMarshal(nil)
 		if err != nil {
 			return "marshal_error", http.StatusInternalServerError, fmt.Errorf("marshalling PRW2 request: %w", err)
 		}
-		bodies = append(bodies, snappy.Encode(nil, outRaw))
+		endIdx += len(o.Timeseries)
+		var c []seriesCommit
+		if i == len(outs)-1 {
+			c = commits
+		} else {
+			n := 0
+			for n < len(commits) && commits[n].outIdx < endIdx {
+				n++
+			}
+			c, commits = commits[:n], commits[n:]
+		}
+		chunks = append(chunks, forwardChunk{
+			body:    snappy.Encode(nil, outRaw),
+			commits: c,
+		})
 	}
 
-	resp, err := p.forwardAll(r.Context(), bodies)
+	resp, err := p.forwardAll(r.Context(), chunks)
 	if err != nil {
 		return "forward_error", http.StatusBadGateway, fmt.Errorf("forwarding to %v: %w", p.cfg.ForwardURL, err)
 	}
@@ -245,6 +260,14 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) (result string, co
 	return "success", http.StatusOK, nil
 }
 
+// forwardChunk is an encoded downstream request together with the synthesis
+// state updates that should be committed once it has been accepted (or
+// rejected as non-retriable).
+type forwardChunk struct {
+	body    []byte
+	commits []seriesCommit
+}
+
 // forwardResponse is what the proxy keeps from a downstream response.
 type forwardResponse struct {
 	code   int
@@ -254,9 +277,14 @@ type forwardResponse struct {
 }
 
 // forwardAll forwards the encoded requests one after another, so samples of a
-// series spread across them keep arriving in timestamp order. It returns the
-// response to pass back to Prometheus, which retries or drops the whole batch
-// based on it:
+// series spread across them keep arriving in timestamp order. Per-series
+// synthesis state for a chunk is committed only when the chunk succeeds (2xx)
+// or fails with a non-retriable status, so a Prometheus retry after a 5xx, 429
+// or transport error re-synthesizes any uncommitted chunks while skipping
+// samples that were already committed.
+//
+// It returns the response to pass back to Prometheus, which retries or drops
+// the whole batch based on it:
 //
 //   - The first failure asking to retry later (5xx or 429). The remaining
 //     requests are not sent, as Prometheus retries the whole batch (429 only
@@ -267,14 +295,14 @@ type forwardResponse struct {
 //
 // The PRW2 written-stats headers of the returned response are replaced with
 // their sums over all downstream responses.
-func (p *Proxy) forwardAll(ctx context.Context, bodies [][]byte) (forwardResponse, error) {
+func (p *Proxy) forwardAll(ctx context.Context, chunks []forwardChunk) (forwardResponse, error) {
 	var (
 		ret     forwardResponse
 		failed  bool
 		written writtenStats
 	)
-	for _, body := range bodies {
-		resp, err := p.forward(ctx, body)
+	for _, chunk := range chunks {
+		resp, err := p.forward(ctx, chunk.body)
 		if err != nil {
 			return forwardResponse{}, err
 		}
@@ -282,14 +310,18 @@ func (p *Proxy) forwardAll(ctx context.Context, bodies [][]byte) (forwardRespons
 
 		switch {
 		case resp.code/100 == 2:
+			p.transformer.commit(chunk.commits)
 			if !failed {
 				ret = resp
 			}
 		case isRetriable(resp.code):
 			written.set(resp.header)
 			return resp, nil
-		case !failed:
-			ret, failed = resp, true
+		default:
+			p.transformer.commit(chunk.commits)
+			if !failed {
+				ret, failed = resp, true
+			}
 		}
 	}
 	written.set(ret.header)

@@ -96,7 +96,11 @@ series keep arriving in order. Prometheus gets back:
 - otherwise the last success,
 
 with the `X-Prometheus-Remote-Write-*-Written` headers summed over all
-requests.
+requests. Per-series synthesis state for each forwarded request is committed
+only when that request succeeds (2xx) or fails with a non-retriable status, so
+a Prometheus retry after a 5xx, 429 or transport error re-synthesizes any
+uncommitted series while skipping synthesized/split series that were already
+committed.
 
 ## Usage
 
@@ -159,4 +163,5 @@ from the WAL in timestamp order:
 - PRW1 is rejected — it carries neither metadata nor start timestamps, so there
   is nothing useful to do with it.
 - When a later part of a split request fails with a 5xx or 429, Prometheus
-  retries the whole batch, re-sending the parts that were already written.
+  retries the whole batch; stateless pass-through series (e.g. gauges or
+  counters that already carry an ST) in earlier parts are re-sent.

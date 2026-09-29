@@ -366,3 +366,39 @@ func TestSynthesizeHistogram_BucketReset(t *testing.T) {
 	require.Equal(t, []int64{2, 6}, v.PositiveBuckets)
 	require.Nil(t, st.h.starting)
 }
+
+func TestCache_Clone(t *testing.T) {
+	var nilCache *Cache
+	require.Nil(t, nilCache.Clone())
+
+	// Float cache: mutating a clone (including resets) leaves the original intact.
+	orig := &Cache{}
+	_, _, skip := orig.SynthesizeFloat(10, 1000)
+	require.True(t, skip)
+
+	uncommitted := orig.Clone()
+	v, st, skip := uncommitted.SynthesizeFloat(2, 2000) // Reset on the clone.
+	require.False(t, skip)
+	require.Equal(t, 2.0, v)
+	require.Equal(t, int64(1999), st)
+
+	// Retrying against orig still sees the initial anchor (v=10, st=1000).
+	v, st, skip = orig.SynthesizeFloat(25, 2000)
+	require.False(t, skip)
+	require.Equal(t, 15.0, v)
+	require.Equal(t, int64(1000), st)
+
+	// Histogram cache: mutating a clone leaves the original intact.
+	histOrig := &Cache{}
+	_, _, skip = histOrig.SynthesizeHistogram(&histogram.Histogram{Count: 10, Sum: 50}, 1000)
+	require.True(t, skip)
+
+	histUncommitted := histOrig.Clone()
+	_, _, _ = histUncommitted.SynthesizeHistogram(&histogram.Histogram{Count: 2, Sum: 5}, 2000)
+
+	hv, st, skip := histOrig.SynthesizeHistogram(&histogram.Histogram{Count: 25, Sum: 120}, 2000)
+	require.False(t, skip)
+	require.Equal(t, uint64(15), hv.Count)
+	require.Equal(t, 70.0, hv.Sum)
+	require.Equal(t, int64(1000), st)
+}

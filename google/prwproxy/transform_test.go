@@ -273,6 +273,21 @@ func TestTransform_OutOfOrderAndDuplicateTimestamps(t *testing.T) {
 		},
 	}, got)
 	require.Equal(t, 2.0, testutil.ToFloat64(tr.metrics.outOfOrderSamples))
+
+	// 5. Untyped series: duplicate/out-of-order samples are dropped from both
+	// the gauge and counter streams.
+	_ = tr.Transform(request(t, series{
+		name:    "mysql_slow_queries",
+		typ:     writev2.Metadata_METRIC_TYPE_UNSPECIFIED,
+		samples: []writev2.Sample{{Value: 10, Timestamp: 2000}},
+	}))
+	got = decode(t, tr.Transform(request(t, series{
+		name:    "mysql_slow_queries",
+		typ:     writev2.Metadata_METRIC_TYPE_UNSPECIFIED,
+		samples: []writev2.Sample{{Value: 10, Timestamp: 2000}},
+	})))
+	require.Empty(t, got)
+	require.Equal(t, 3.0, testutil.ToFloat64(tr.metrics.outOfOrderSamples))
 }
 
 func TestTransform_ConcurrentAccessValidation(t *testing.T) {
@@ -285,15 +300,13 @@ func TestTransform_ConcurrentAccessValidation(t *testing.T) {
 	st.mtx.Lock()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_ = tr.Transform(request(t, series{
 			name:    "http_requests_total",
 			typ:     writev2.Metadata_METRIC_TYPE_COUNTER,
 			samples: []writev2.Sample{{Value: 100, Timestamp: 1000}},
 		}))
-	}()
+	})
 
 	// Give the goroutine a moment to hit TryLock() and block on Lock(),
 	// then release the lock so it completes cleanly.
