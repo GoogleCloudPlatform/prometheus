@@ -39,6 +39,8 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/prometheus/prometheus/config"
+	gcm_export "github.com/prometheus/prometheus/google/export"
+	gcm_exportsetup "github.com/prometheus/prometheus/google/export/setup"
 	"github.com/prometheus/prometheus/model/exemplar"
 	"github.com/prometheus/prometheus/model/histogram"
 	"github.com/prometheus/prometheus/model/labels"
@@ -5879,18 +5881,52 @@ func (c *countSeriesLifecycleCallback) PostDeletion(s map[chunks.HeadSeriesRef]l
 }
 
 func TestHeadAppender_Commit_GCMExportFiltersRejectedSamples(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	setupExporter := func(t *testing.T, registerMetrics bool) {
+		t.Helper()
+		opts := gcm_export.ExporterOpts{
+			Disable: true,
+		}
+		opts.DefaultUnsetFields()
+		var r prometheus.Registerer
+		if registerMetrics {
+			r = reg
+		}
+		e, err := gcm_export.New(context.Background(), nil, r, opts, gcm_export.NopLease())
+		require.NoError(t, err)
+		require.NoError(t, gcm_exportsetup.SetGlobal(e))
+		t.Cleanup(func() {
+			require.NoError(t, gcm_exportsetup.SetGlobal(nil))
+		})
+	}
+	getExportedCount := func(t *testing.T) float64 {
+		t.Helper()
+		mfs, err := reg.Gather()
+		require.NoError(t, err)
+		for _, mf := range mfs {
+			if mf.GetName() == "gcm_export_samples_exported_total" {
+				return mf.GetMetric()[0].GetCounter().GetValue()
+			}
+		}
+		t.Fatal("gcm_export_samples_exported_total metric not found")
+		return 0
+	}
+
 	t.Run("ooo disabled", func(t *testing.T) {
+		setupExporter(t, true)
 		h, _ := newTestHead(t, DefaultBlockDuration, wlog.CompressionNone, false)
 		defer func() {
 			require.NoError(t, h.Close())
 		}()
+
+		beforeExported := getExportedCount(t)
 
 		a := h.Appender(context.Background())
 		lbls := labels.FromStrings("__name__", "test_metric", "job", "test")
 		// Accepted sample at t=100.
 		ref, err := a.Append(0, lbls, 100, 1.0)
 		require.NoError(t, err)
-		// Duplicate timestamp with identical value (rejected at Commit).
+		// Duplicate timestamp with identical value (silently dropped at Commit).
 		_, err = a.Append(ref, lbls, 100, 1.0)
 		require.NoError(t, err)
 		// Duplicate timestamp with different value (rejected at Commit).
@@ -5905,6 +5941,10 @@ func TestHeadAppender_Commit_GCMExportFiltersRejectedSamples(t *testing.T) {
 
 		require.NoError(t, a.Commit())
 
+		require.Equal(t, 2.0, getExportedCount(t)-beforeExported)
+		require.Equal(t, 2.0, prom_testutil.ToFloat64(h.metrics.samplesAppended.WithLabelValues(sampleMetricTypeFloat)))
+		require.Equal(t, 1.0, prom_testutil.ToFloat64(h.metrics.outOfOrderSamples.WithLabelValues(sampleMetricTypeFloat)))
+		require.Equal(t, 0.0, prom_testutil.ToFloat64(h.metrics.outOfOrderSamplesAppended.WithLabelValues(sampleMetricTypeFloat)))
 		require.Equal(t, []record.RefSample{
 			{Ref: chunks.HeadSeriesRef(ref), T: 100, V: 1.0},
 			{Ref: chunks.HeadSeriesRef(ref), T: 200, V: 4.0},
@@ -5912,10 +5952,13 @@ func TestHeadAppender_Commit_GCMExportFiltersRejectedSamples(t *testing.T) {
 	})
 
 	t.Run("ooo enabled", func(t *testing.T) {
+		setupExporter(t, false)
 		h, _ := newTestHead(t, DefaultBlockDuration, wlog.CompressionNone, true)
 		defer func() {
 			require.NoError(t, h.Close())
 		}()
+
+		beforeExported := getExportedCount(t)
 
 		a := h.Appender(context.Background())
 		lbls := labels.FromStrings("__name__", "test_metric", "job", "test")
@@ -5925,7 +5968,7 @@ func TestHeadAppender_Commit_GCMExportFiltersRejectedSamples(t *testing.T) {
 		// Duplicate of in-order sample (rejected at Commit).
 		_, err = a.Append(ref, lbls, 100, 2.0)
 		require.NoError(t, err)
-		// Accepted out-of-order sample within OOO window at t=50.
+		// Accepted out-of-order sample within OOO window at t=50 (stored in TSDB OOO chunk, but not exported to GCM).
 		_, err = a.Append(ref, lbls, 50, 3.0)
 		require.NoError(t, err)
 		// Duplicate of out-of-order sample at t=50 (rejected at Commit).
@@ -5934,9 +5977,12 @@ func TestHeadAppender_Commit_GCMExportFiltersRejectedSamples(t *testing.T) {
 
 		require.NoError(t, a.Commit())
 
+		require.Equal(t, 1.0, getExportedCount(t)-beforeExported)
+		require.Equal(t, 2.0, prom_testutil.ToFloat64(h.metrics.samplesAppended.WithLabelValues(sampleMetricTypeFloat)))
+		require.Equal(t, 0.0, prom_testutil.ToFloat64(h.metrics.outOfOrderSamples.WithLabelValues(sampleMetricTypeFloat)))
+		require.Equal(t, 1.0, prom_testutil.ToFloat64(h.metrics.outOfOrderSamplesAppended.WithLabelValues(sampleMetricTypeFloat)))
 		require.Equal(t, []record.RefSample{
 			{Ref: chunks.HeadSeriesRef(ref), T: 100, V: 1.0},
-			{Ref: chunks.HeadSeriesRef(ref), T: 50, V: 3.0},
 		}, a.(*initAppender).app.(*headAppender).samples)
 	})
 }

@@ -990,14 +990,11 @@ func (a *headAppender) Commit() (err error) {
 				if s.T > inOrderMaxt {
 					inOrderMaxt = s.T
 				}
+				exportSamples = append(exportSamples, s)
 			} else {
 				// The sample is an exact duplicate, and should be silently dropped.
 				floatsAppended--
 			}
-		}
-
-		if ok {
-			exportSamples = append(exportSamples, s)
 		}
 
 		if chunkCreated {

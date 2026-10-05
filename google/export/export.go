@@ -413,9 +413,13 @@ func New(ctx context.Context, logger log.Logger, reg prometheus.Registerer, opts
 		lease = NopLease()
 	}
 
-	metricClient, err := defaultNewMetricClient(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("create metric client: %w", err)
+	var metricClient metricServiceClient
+	if !opts.Disable {
+		var err error
+		metricClient, err = defaultNewMetricClient(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("create metric client: %w", err)
+		}
 	}
 
 	e := &Exporter{
@@ -512,7 +516,7 @@ func (e *Exporter) ApplyConfig(cfg *config.Config) (err error) {
 		}
 	}
 
-	if recreateClient {
+	if recreateClient && !e.opts.Disable {
 		// If changed, or we're calling this for the first time, we need to recreate the client.
 		e.metricClient, err = e.newMetricClient(e.ctx, e.opts)
 		if err != nil {
@@ -720,7 +724,10 @@ func (e *Exporter) Run() error {
 	send := func() {
 		e.mtx.RLock()
 		opts := e.opts
-		sendFunc := e.metricClient.CreateTimeSeries
+		var sendFunc func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error
+		if e.metricClient != nil {
+			sendFunc = e.metricClient.CreateTimeSeries
+		}
 		e.mtx.RUnlock()
 
 		// Send the batch and once it completed, trigger next to process remaining data in the
