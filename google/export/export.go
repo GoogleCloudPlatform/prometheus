@@ -730,6 +730,10 @@ func (e *Exporter) Run() error {
 		var sendFunc func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error
 		if e.metricClient != nil {
 			sendFunc = e.metricClient.CreateTimeSeries
+		} else {
+			sendFunc = func(context.Context, *monitoring_pb.CreateTimeSeriesRequest, ...gax.CallOption) error {
+				return errors.New("metric client is not initialized")
+			}
 		}
 		e.mtx.RUnlock()
 
