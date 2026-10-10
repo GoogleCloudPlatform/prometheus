@@ -1337,6 +1337,7 @@ func handleAppendableError(err error, appended, oooRejected, oobRejected, tooOld
 func (a *headAppenderBase) commitFloats(b *appendBatch, acc *appenderCommitContext) {
 	var ok, chunkCreated bool
 	var series *memSeries
+	exportFloats := b.floats[:0]
 
 	for i, s := range b.floats {
 		series = b.floatSeries[i]
@@ -1473,6 +1474,7 @@ func (a *headAppenderBase) commitFloats(b *appendBatch, acc *appenderCommitConte
 				if staleToNonStale {
 					a.head.numStaleSeries.Dec()
 				}
+				exportFloats = append(exportFloats, s)
 			} else {
 				// The sample is an exact duplicate, and should be silently dropped.
 				acc.floatsAppended--
@@ -1487,6 +1489,7 @@ func (a *headAppenderBase) commitFloats(b *appendBatch, acc *appenderCommitConte
 		series.pendingCommit = false
 		series.Unlock()
 	}
+	b.floats = exportFloats
 }
 
 // For details on the commitHistograms function, see the commitFloats docs.
