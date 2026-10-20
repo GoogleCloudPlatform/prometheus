@@ -221,79 +221,79 @@ func TestExporter_wrapMetadata(t *testing.T) {
 			desc:   "nil MetadataFunc always defaults to gauge",
 			mf:     nil,
 			metric: "some_metric",
-			want:   MetricMetadata{Metric: "some_metric", Type: model.MetricTypeGauge},
+			want:   MetricMetadata{MetricFamily: "some_metric", Type: model.MetricTypeGauge},
 			wantOK: true,
 		}, {
 			desc:   "nil MetadataFunc preserves synthetic metric metadata",
 			mf:     nil,
 			metric: "up",
 			want: MetricMetadata{
-				Metric: "up",
-				Type:   model.MetricTypeGauge,
-				Help:   "Up indicates whether the last target scrape was successful.",
+				MetricFamily: "up",
+				Type:         model.MetricTypeGauge,
+				Help:         "Up indicates whether the last target scrape was successful.",
 			},
 			wantOK: true,
 		}, {
 			desc: "synthetic metric metadata precedence",
 			mf: func(string) (MetricMetadata, bool) {
 				return MetricMetadata{
-					Metric: "up",
-					Type:   model.MetricTypeCounter,
+					MetricFamily: "up",
+					Type:         model.MetricTypeCounter,
 				}, false
 			},
 			metric: "up",
 			want: MetricMetadata{
-				Metric: "up",
-				Type:   model.MetricTypeGauge,
-				Help:   "Up indicates whether the last target scrape was successful.",
+				MetricFamily: "up",
+				Type:         model.MetricTypeGauge,
+				Help:         "Up indicates whether the last target scrape was successful.",
 			},
 			wantOK: true,
 		}, {
 			desc: "regular metadata is returned as is",
 			mf: func(string) (MetricMetadata, bool) {
 				return MetricMetadata{
-					Metric: "some_metric",
-					Type:   model.MetricTypeCounter,
-					Help:   "useful help",
+					MetricFamily: "some_metric",
+					Type:         model.MetricTypeCounter,
+					Help:         "useful help",
 				}, true
 			},
 			metric: "some_metric",
 			want: MetricMetadata{
-				Metric: "some_metric",
-				Type:   model.MetricTypeCounter,
-				Help:   "useful help",
+				MetricFamily: "some_metric",
+				Type:         model.MetricTypeCounter,
+				Help:         "useful help",
 			},
 			wantOK: true,
 		}, {
 			desc: "info metadata is returned as is",
 			mf: func(string) (MetricMetadata, bool) {
 				return MetricMetadata{
-					Metric: "some_info_metric",
-					Type:   model.MetricTypeInfo,
-					Help:   "info help",
+					MetricFamily: "some_info_metric",
+					Type:         model.MetricTypeInfo,
+					Help:         "info help",
 				}, true
 			},
 			metric: "some_info_metric",
 			want: MetricMetadata{
-				Metric: "some_info_metric",
-				Type:   model.MetricTypeInfo,
-				Help:   "info help",
+				MetricFamily: "some_info_metric",
+				Type:         model.MetricTypeInfo,
+				Help:         "info help",
 			},
 			wantOK: true,
 		}, {
 			desc: "stateset metadata is returned as is",
 			mf: func(string) (MetricMetadata, bool) {
 				return MetricMetadata{
-					Metric: "some_stateset_metric",
-					Type:   model.MetricTypeStateset,
-					Help:   "stateset help",
+					MetricFamily: "some_stateset_metric",
+					Type:         model.MetricTypeStateset,
+					Help:         "stateset help",
 				}, true
 			},
 			metric: "some_stateset_metric",
 			want: MetricMetadata{
-				Metric: "some_stateset_metric",
-				Type:   model.MetricTypeStateset,
-				Help:   "stateset help",
+				MetricFamily: "some_stateset_metric",
+				Type:         model.MetricTypeStateset,
+				Help:         "stateset help",
 			},
 			wantOK: true,
 		}, {
@@ -303,15 +303,15 @@ func TestExporter_wrapMetadata(t *testing.T) {
 			},
 			metric: "some_metric",
 			want: MetricMetadata{
-				Metric: "some_metric",
-				Type:   model.MetricTypeUnknown,
+				MetricFamily: "some_metric",
+				Type:         model.MetricTypeUnknown,
 			},
 			wantOK: true,
 		}, {
 			desc: "not found metadata returns false if base name has metadata (_sum)",
 			mf: func(m string) (MetricMetadata, bool) {
 				if m == "foo" {
-					return MetricMetadata{Metric: "foo", Type: model.MetricTypeSummary}, true
+					return MetricMetadata{MetricFamily: "foo", Type: model.MetricTypeSummary}, true
 				}
 				return MetricMetadata{}, false
 			},
@@ -322,7 +322,7 @@ func TestExporter_wrapMetadata(t *testing.T) {
 			desc: "not found metadata returns false if base name has metadata (_bucket)",
 			mf: func(m string) (MetricMetadata, bool) {
 				if m == "foo" {
-					return MetricMetadata{Metric: "foo", Type: model.MetricTypeSummary}, true
+					return MetricMetadata{MetricFamily: "foo", Type: model.MetricTypeSummary}, true
 				}
 				return MetricMetadata{}, false
 			},
@@ -333,7 +333,7 @@ func TestExporter_wrapMetadata(t *testing.T) {
 			desc: "not found metadata returns false if base name has metadata (_count)",
 			mf: func(m string) (MetricMetadata, bool) {
 				if m == "foo" {
-					return MetricMetadata{Metric: "foo", Type: model.MetricTypeSummary}, true
+					return MetricMetadata{MetricFamily: "foo", Type: model.MetricTypeSummary}, true
 				}
 				return MetricMetadata{}, false
 			},
