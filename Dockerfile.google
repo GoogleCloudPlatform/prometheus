@@ -1,6 +1,7 @@
 # This dockerfile is multi target. Use DOCKER_BUILDKIT=1 when building and reference the target:
 # --target=vendor with -o <host local path> to build image with the generated dependencies to copy and vendor on demand.
-# --target=app to build actual application image.
+# --target=app to build actual application image (includes prometheus, promtool, and prwproxy).
+# --target=prwproxy to build minimal standalone prwproxy sidecar image without UI assets.
 
 # For the lack of the other official Google nodejs image, we use serverless project
 # images to build the Prometheus frontent (https://cloud.google.com/docs/buildpacks/base-images).
@@ -122,7 +123,12 @@ RUN if [ "${TARGETARCH}" = "arm64" ] && [ "${BUILDARCH}" != "arm64" ]; then \
     -mod=vendor \
     -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
     -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
-    ./cmd/promtool
+    ./cmd/promtool && \
+    go build \
+    -mod=vendor \
+    -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
+    -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
+    ./cmd/prwproxy
 
 # Configure distroless base image like the upstream Prometheus image.
 # Since the directory and symlink setup needs shell access, we need yet another
@@ -136,6 +142,7 @@ FROM ${IMAGE_BASE} AS app
 
 COPY --from=buildbase /workspace/prometheus /bin/prometheus
 COPY --from=buildbase /workspace/promtool /bin/promtool
+COPY --from=buildbase /workspace/prwproxy /bin/prwproxy
 COPY --from=appbase --chown=nobody:nobody /etc/prometheus /etc/prometheus
 COPY --from=appbase --chown=nobody:nobody /prometheus /prometheus
 COPY LICENSE /LICENSE
@@ -147,3 +154,44 @@ VOLUME     [ "/prometheus" ]
 ENTRYPOINT [ "/bin/prometheus" ]
 CMD        [ "--config.file=/etc/prometheus/prometheus.yml", \
              "--storage.tsdb.path=/prometheus" ]
+
+# --target=prwproxy
+FROM gobase AS buildprwproxy
+ARG TARGETARCH
+ARG TARGETOS
+ARG BUILDARCH
+COPY --from=govendor /workspace ./
+ENV GOEXPERIMENT=boringcrypto
+ENV CGO_ENABLED=1
+ENV GOFIPS140=off
+ENV GOTOOLCHAIN=local
+ENV GOWORK=off
+ENV GOARCH=${TARGETARCH}
+ENV GOOS=${TARGETOS}
+RUN if [ "${TARGETARCH}" = "arm64" ] && [ "${BUILDARCH}" != "arm64" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        gcc-aarch64-linux-gnu libc6-dev-arm64-cross && \
+      rm -rf /var/lib/apt/lists/*; \
+      export CC=aarch64-linux-gnu-gcc; \
+    elif [ "${TARGETARCH}" = "amd64" ] && [ "${BUILDARCH}" != "amd64" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        gcc-x86-64-linux-gnu libc6-dev-amd64-cross && \
+      rm -rf /var/lib/apt/lists/*; \
+      export CC=x86_64-linux-gnu-gcc; \
+    fi && \
+    go build \
+    -mod=vendor \
+    -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
+    -X github.com/prometheus/common/version.BuildDate=$(date --iso-8601=seconds)" \
+    ./cmd/prwproxy
+
+FROM ${IMAGE_BASE} AS prwproxy
+
+COPY --from=buildprwproxy /workspace/prwproxy /bin/prwproxy
+COPY LICENSE /LICENSE
+COPY NOTICE /NOTICE
+
+USER       nobody
+EXPOSE     9092
+ENTRYPOINT [ "/bin/prwproxy" ]
+
