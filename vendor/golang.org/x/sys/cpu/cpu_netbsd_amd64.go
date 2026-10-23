@@ -18,7 +18,6 @@ func doinit() {
 	X86.HasAVX512 = false
 	X86.HasAVX512F = false
 	X86.HasAVX512CD = false
-	X86.HasAVX512CD = false
 	X86.HasAVX512ER = false
 	X86.HasAVX512PF = false
 	X86.HasAVX512VL = false
@@ -37,7 +36,6 @@ func doinit() {
 	X86.HasAVX512BITALG = false
 	X86.HasAVX512BF16 = false
 	X86.HasAVXIFMA = false
-	X86.HasAVXVNNI = false
 	X86.HasAVXVNNIInt8 = false
 
 }
