@@ -1464,6 +1464,10 @@ func makeTestCounters(n int) []byte {
 	return makeTestMetricFamily(n, "metric_b", "counter")
 }
 
+func makeTestUntyped(n int) []byte {
+	return makeTestMetricFamily(n, "metric_c", "untyped")
+}
+
 func makeTestFloatHistograms(n int) []byte {
 	var sb strings.Builder
 	sb.WriteString(`name: "test_float_hist"
@@ -1975,6 +1979,133 @@ test_metric 15
 	require.Equal(t, chunkenc.ValNone, seriesIt.Next())
 }
 
+func TestScrapeLoopAppend_SplitUnknownTypes(t *testing.T) {
+	ts := time.Now()
+
+	requireSample := func(t *testing.T, s teststorage.Sample, name string, val float64, ts, st int64, isNaN bool, wantType model.MetricType, wantTypeLabel string) {
+		t.Helper()
+		require.Equal(t, name, s.L.Get(model.MetricNameLabel))
+		require.Equal(t, wantTypeLabel, s.L.Get(model.MetricTypeLabel))
+		require.Equal(t, ts, s.T)
+		if isNaN {
+			require.True(t, value.IsStaleNaN(s.V))
+		} else {
+			require.Equal(t, val, s.V)
+			require.Equal(t, wantType, s.M.Type)
+		}
+		require.Equal(t, st, s.ST)
+	}
+
+	for _, enableTypeLabels := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enableTypeAndUnitLabels=%t", enableTypeLabels), func(t *testing.T) {
+			s := teststorage.New(t)
+			appTest := teststorage.NewAppendable().Then(s)
+
+			sl, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+				sl.synthesizeST = true
+				sl.parseST = true
+				sl.splitUnknownTypes = true
+				sl.appendMetadataToWAL = true
+				sl.enableTypeAndUnitLabels = enableTypeLabels
+				sl.validationScheme = model.LegacyValidation
+				origMutator := sl.sampleMutator
+				sl.sampleMutator = func(l labels.Labels) labels.Labels {
+					l = origMutator(l)
+					if l.Get(model.MetricNameLabel) == "relabeled_counter" {
+						lb := labels.NewBuilder(l)
+						lb.Set(model.MetricTypeLabel, string(model.MetricTypeCounter))
+						return lb.Labels()
+					}
+					return l
+				}
+			})
+
+			wantTypeLbl := func(mt model.MetricType) string {
+				if enableTypeLabels {
+					return string(mt)
+				}
+				return ""
+			}
+
+			// First Scrape:
+			// - untyped_metric (no TYPE) -> gauge appended immediately, counter anchored (skipped).
+			// - explicit_unknown (# TYPE untyped) -> gauge appended immediately, counter anchored (skipped).
+			// - typed_counter (# TYPE counter) -> not split, anchored (skipped).
+			// - relabeled_counter (__type__="counter" set by relabeling) -> not split, anchored (skipped).
+			scrapeA := []byte(`# TYPE typed_counter counter
+typed_counter 5
+# HELP explicit_unknown some help
+# TYPE explicit_unknown untyped
+explicit_unknown 20
+untyped_metric{foo="bar"} 10
+relabeled_counter 7
+`)
+			app := sl.appender()
+			_, _, _, err := app.append(scrapeA, "text/plain; version=0.0.4", ts)
+			require.NoError(t, err)
+			require.NoError(t, app.Commit())
+
+			got := appTest.ResultSamples()
+			require.Len(t, got, 2)
+			requireSample(t, got[0], "explicit_unknown/unknown", 20, timestamp.FromTime(ts), 0, false, model.MetricTypeGauge, wantTypeLbl(model.MetricTypeGauge))
+			require.Equal(t, "some help", got[0].M.Help)
+			requireSample(t, got[1], "untyped_metric/unknown", 10, timestamp.FromTime(ts), 0, false, model.MetricTypeGauge, wantTypeLbl(model.MetricTypeGauge))
+
+			// Second Scrape:
+			// - untyped_metric increases 10 -> 15: gauge=15 (ST=0), counter=5 (ST=ts).
+			// - explicit_unknown resets 20 -> 12: gauge=12 (ST=0), counter=12 (ST=ts2-1).
+			// - typed_counter increases 5 -> 8: counter=3 (ST=ts).
+			// - relabeled_counter increases 7 -> 11: counter=4 (ST=ts).
+			ts2 := ts.Add(time.Second)
+			scrapeB := []byte(`# TYPE typed_counter counter
+typed_counter 8
+# HELP explicit_unknown some help
+# TYPE explicit_unknown untyped
+explicit_unknown 12
+untyped_metric{foo="bar"} 15
+relabeled_counter 11
+`)
+			app = sl.appender()
+			_, _, _, err = app.append(scrapeB, "text/plain; version=0.0.4", ts2)
+			require.NoError(t, err)
+			require.NoError(t, app.Commit())
+
+			got = appTest.ResultSamples()
+			require.Len(t, got, 8)
+			requireSample(t, got[2], "typed_counter", 3, timestamp.FromTime(ts2), timestamp.FromTime(ts), false, model.MetricTypeCounter, wantTypeLbl(model.MetricTypeCounter))
+			requireSample(t, got[3], "explicit_unknown/unknown", 12, timestamp.FromTime(ts2), 0, false, model.MetricTypeGauge, wantTypeLbl(model.MetricTypeGauge))
+			requireSample(t, got[4], "explicit_unknown/unknown:counter", 12, timestamp.FromTime(ts2), timestamp.FromTime(ts2)-1, false, model.MetricTypeCounter, wantTypeLbl(model.MetricTypeCounter))
+			require.Equal(t, "some help", got[4].M.Help)
+			requireSample(t, got[5], "untyped_metric/unknown", 15, timestamp.FromTime(ts2), 0, false, model.MetricTypeGauge, wantTypeLbl(model.MetricTypeGauge))
+			requireSample(t, got[6], "untyped_metric/unknown:counter", 5, timestamp.FromTime(ts2), timestamp.FromTime(ts), false, model.MetricTypeCounter, wantTypeLbl(model.MetricTypeCounter))
+			requireSample(t, got[7], "relabeled_counter", 4, timestamp.FromTime(ts2), timestamp.FromTime(ts), false, model.MetricTypeCounter, string(model.MetricTypeCounter))
+
+			// Third Scrape: untyped_metric disappears -> both /unknown and /unknown:counter get StaleNaN.
+			ts3 := ts2.Add(time.Second)
+			scrapeC := []byte(`# TYPE typed_counter counter
+typed_counter 9
+# HELP explicit_unknown some help
+# TYPE explicit_unknown untyped
+explicit_unknown 14
+relabeled_counter 12
+`)
+			app = sl.appender()
+			_, _, _, err = app.append(scrapeC, "text/plain; version=0.0.4", ts3)
+			require.NoError(t, err)
+			require.NoError(t, app.Commit())
+
+			got = appTest.ResultSamples()
+			require.Len(t, got, 14)
+			requireSample(t, got[8], "typed_counter", 4, timestamp.FromTime(ts3), timestamp.FromTime(ts), false, model.MetricTypeCounter, wantTypeLbl(model.MetricTypeCounter))
+			requireSample(t, got[9], "explicit_unknown/unknown", 14, timestamp.FromTime(ts3), 0, false, model.MetricTypeGauge, wantTypeLbl(model.MetricTypeGauge))
+			requireSample(t, got[10], "explicit_unknown/unknown:counter", 14, timestamp.FromTime(ts3), timestamp.FromTime(ts2)-1, false, model.MetricTypeCounter, wantTypeLbl(model.MetricTypeCounter))
+			requireSample(t, got[11], "relabeled_counter", 5, timestamp.FromTime(ts3), timestamp.FromTime(ts), false, model.MetricTypeCounter, string(model.MetricTypeCounter))
+			requireSample(t, got[12], "untyped_metric/unknown", 0, timestamp.FromTime(ts3), 0, true, "", wantTypeLbl(model.MetricTypeGauge))
+			requireSample(t, got[13], "untyped_metric/unknown:counter", 0, timestamp.FromTime(ts3), 0, true, "", wantTypeLbl(model.MetricTypeCounter))
+		})
+	}
+}
+
 func TestScrapeLoopAppend_StartTimeSynthesis_OutOfOrder(t *testing.T) {
 	ts := time.Now()
 
@@ -2415,7 +2546,7 @@ func BenchmarkScrapeLoopAppend(b *testing.B) {
 							{name: "PromProto", contentType: "application/vnd.google.protobuf", parsable: metricsProto},
 						} {
 							b.Run(fmt.Sprintf("fmt=%v", bcase.name), func(b *testing.B) {
-								benchScrapeLoopAppend(b, withStorage, appV2, bcase.parsable, bcase.contentType, appendMetadataToWAL, false, false, false)
+								benchScrapeLoopAppend(b, withStorage, appV2, bcase.parsable, bcase.contentType, appendMetadataToWAL, false, false, false, false)
 							})
 						}
 					})
@@ -2441,8 +2572,36 @@ func BenchmarkScrapeLoopAppend_STSynthesis(b *testing.B) {
 				{name: "237FamsAllTypes", parsableText: readTextParseTestMetrics(b), contentType: "application/openmetrics-text", convertToNHCB: true}, // ~185.7 KB, ~70.6 KB in proto.
 			} {
 				b.Run(fmt.Sprintf("withStorage=%v/synthesizeST=%v/data=%v", withStorage, synthesizeST, data.name), func(b *testing.B) {
-					benchScrapeLoopAppend(b, withStorage, true, data.parsableText, data.contentType, false, false, synthesizeST, data.convertToNHCB)
+					benchScrapeLoopAppend(b, withStorage, true, data.parsableText, data.contentType, false, false, synthesizeST, data.convertToNHCB, false)
 				})
+			}
+		}
+	}
+}
+
+// Recommended CLI invocation:
+/*
+	export bench=splitUnknown && go test ./scrape/... \
+		-run '^$' -bench '^BenchmarkScrapeLoopAppend_SplitUnknownTypes' \
+		-benchtime 2s -count 6 -cpu 2 -timeout 999m -benchmem \
+		| tee ${bench}.txt
+*/
+func BenchmarkScrapeLoopAppend_SplitUnknownTypes(b *testing.B) {
+	for _, withStorage := range []bool{false, true} {
+		for _, splitUnknown := range []bool{false, true} {
+			for _, synthesizeST := range []bool{false, true} {
+				for _, data := range []struct {
+					name         string
+					parsableText []byte
+				}{
+					{name: "100Untyped", parsableText: makeTestUntyped(100)},
+					{name: "100Counters", parsableText: makeTestCounters(100)},
+					{name: "237FamsAllTypes", parsableText: readTextParseTestMetrics(b)},
+				} {
+					b.Run(fmt.Sprintf("withStorage=%v/splitUnknown=%v/synthesizeST=%v/data=%v", withStorage, splitUnknown, synthesizeST, data.name), func(b *testing.B) {
+						benchScrapeLoopAppend(b, withStorage, true, data.parsableText, "text/plain", false, false, synthesizeST, false, splitUnknown)
+					})
+				}
 			}
 		}
 	}
@@ -2458,6 +2617,7 @@ func benchScrapeLoopAppend(
 	enableExemplarStorage bool,
 	synthesizeST bool,
 	convertToNHCB bool,
+	splitUnknown bool,
 ) {
 	var a compatAppendable = teststorage.NewAppendable().SkipRecording(true) // Make it noop for benchmark purposes.
 	if withStorage {
@@ -2472,6 +2632,7 @@ func benchScrapeLoopAppend(
 	sl, _ := newTestScrapeLoop(b, withAppendable(a, appV2), func(sl *scrapeLoop) {
 		sl.appendMetadataToWAL = appendMetadataToWAL
 		sl.synthesizeST = synthesizeST
+		sl.splitUnknownTypes = splitUnknown
 		sl.enableNativeHistogramScraping = true
 		sl.convertClassicHistToNHCB = convertToNHCB
 		sl.alwaysScrapeClassicHist = false
@@ -2510,7 +2671,7 @@ func BenchmarkScrapeLoopAppend_HistogramsWithExemplars(b *testing.B) {
 	for _, appV2 := range []bool{false, true} {
 		b.Run(fmt.Sprintf("appV2=%v", appV2), func(b *testing.B) {
 			parsable := makeTestHistogramsWithExemplars(100) // ~255.8 KB in OM text.
-			benchScrapeLoopAppend(b, true, appV2, parsable, "application/openmetrics-text", false, true, false, false)
+			benchScrapeLoopAppend(b, true, appV2, parsable, "application/openmetrics-text", false, true, false, false, false)
 		})
 	}
 }

@@ -824,6 +824,9 @@ type cacheEntry struct {
 
 	// st is an optional state for ST synthesis.
 	st *stCache
+
+	// unknown holds state for splitting untyped series when splitUnknownTypes is enabled.
+	unknown *unknownSeriesState
 }
 
 type scrapeLoop struct {
@@ -878,6 +881,7 @@ type scrapeLoop struct {
 	enableSTZeroIngestion   bool
 	parseST                 bool // Used by AppenderV2 only.
 	enableTypeAndUnitLabels bool
+	splitUnknownTypes       bool
 	reportExtraMetrics      bool
 	appendMetadataToWAL     bool
 	passMetadataInContext   bool
@@ -1036,6 +1040,12 @@ func (c *scrapeCache) trackStaleness(ref storage.SeriesRef, ce *cacheEntry) {
 func (c *scrapeCache) forEachStale(f func(storage.SeriesRef, labels.Labels) bool) {
 	for ref, ce := range c.seriesPrev {
 		if _, ok := c.seriesCur[ref]; !ok {
+			if ce.unknown != nil {
+				if !ce.unknown.forEachStale(ce.ref, f) {
+					break
+				}
+				continue
+			}
 			if !f(ce.ref, ce.lset) {
 				break
 			}
@@ -1251,6 +1261,7 @@ func newScrapeLoop(opts scrapeLoopOptions) *scrapeLoop {
 		parseST:                 opts.sp.options.ParseST || opts.sp.options.EnableStartTimestampZeroIngestion,
 		synthesizeST:            opts.sp.options.SynthesizeST,
 		enableTypeAndUnitLabels: opts.sp.options.EnableTypeAndUnitLabels,
+		splitUnknownTypes:       opts.sp.options.SplitUnknownTypes,
 		appendMetadataToWAL:     opts.sp.options.AppendMetadata,
 		passMetadataInContext:   opts.sp.options.PassMetadataInContext,
 		skipJitterOffsetting:    opts.sp.options.skipJitterOffsetting,

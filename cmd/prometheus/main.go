@@ -703,6 +703,9 @@ func main() {
 	a.Flag("gmp.storage.delete-data-on-start", "[GMP fork experimental flag] If true, all the storage related data (e.g. blocks, lock file, WAL, head chunks) in the --storage.tsdb.path or --storage.agent.path (depending on the mode) will be deleted, right before opening the DB. As a result, all previously collected samples will be uncoverably dropped. Use it in setups where the availability is more important than the persistence between restarts, as replaying data can take time and resources. This flag is especially useful on Kubernetes with ephemeral storage (for consistency between pod vs container restart), remote write use cases that prioritize live data and when you want to auto-recover from the OOM crashloops without changing memory limits for Prometheus (see https://github.com/prometheus/prometheus/issues/13939).").
 		Default("false").BoolVar(&deleteDataOnStart)
 
+	a.Flag("gmp.scrape.split-unknown-types", "[GMP fork experimental flag] If true, untyped ('unknown') scraped metrics are split at scrape time into two series: '<name>/unknown' (gauge with raw value) and '<name>/unknown:counter' (cumulative counter with synthesized start timestamp when st-synthesis is enabled).").
+		Default("false").BoolVar(&cfg.scrape.SplitUnknownTypes)
+
 	opts := gcm_export.Opts{
 		ExporterOpts: export.ExporterOpts{
 			UserAgentProduct: fmt.Sprintf("prometheus/%s", version.Version),
