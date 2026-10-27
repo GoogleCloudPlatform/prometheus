@@ -130,6 +130,7 @@ func (sl *scrapeLoopAppenderV2) append(b []byte, contentType string, ts time.Tim
 		e              exemplar.Exemplar // Escapes to heap so hoisted out of loop.
 		lastMeta       *metaEntry
 		lastMFName     []byte
+		unknownLb      *labels.Builder
 	)
 
 	exemplars := make([]exemplar.Exemplar, 0, 1)
@@ -158,6 +159,7 @@ loop:
 			fh                       *histogram.FloatHistogram
 			skipAppend               bool
 			stCache                  *stCache
+			unknownState             *unknownSeriesState
 		)
 		if et, err = p.Next(); err != nil {
 			if errors.Is(err, io.EOF) {
@@ -321,6 +323,11 @@ loop:
 			}
 
 			// Note that even if append is skipped, we may still add to the cache to make sure we save stCache.
+			if sl.splitUnknownTypes && !isHistogram {
+				var split bool
+				split, ref, stCache, unknownState, err = sl.tryAppendSplitUnknown(app, &unknownLb, ref, lset, st, t, val, &appOpts, lastMFName, &lastMeta, &ce, &seriesCached, stCache)
+				skipAppend = skipAppend || split
+			}
 			if !skipAppend {
 				// Append sample to the storage.
 				ref, err = app.Append(ref, lset, st, t, val, h, fh, appOpts)
@@ -353,6 +360,9 @@ loop:
 			if sampleLimitErr == nil && bucketLimitErr == nil {
 				seriesAdded++
 			}
+		}
+		if ce != nil && sampleAdded {
+			ce.unknown = unknownState
 		}
 
 		if ce != nil && sl.synthesizeST {
@@ -462,15 +472,23 @@ func (sl *scrapeLoop) checkAndSynthesizeStartTime(
 	var skipAppend bool
 	var c *stCache
 
+	if sl.splitUnknownTypes && ce != nil && ce.unknown != nil {
+		return st, val, h, fh, skipAppend, c
+	}
+
 	// TODO(https://github.com/prometheus/prometheus/issues/1790): Move isSeriesPartOfFamily inside parsers.
 	if ce == nil || ce.st == nil {
-		metadata, ok := sl.cache.GetMetadata(string(lastMFName))
-		if !ok || !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, metadata.Type) {
-			return st, val, h, fh, skipAppend, c
+		mType := model.MetricType(lset.Get(model.MetricTypeLabel))
+		if mType == "" {
+			metadata, ok := sl.cache.GetMetadata(string(lastMFName))
+			if !ok || !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, metadata.Type) {
+				return st, val, h, fh, skipAppend, c
+			}
+			mType = metadata.Type
 		}
 
 		// TODO(bwplotka): Add support for _count and _sum summary series.
-		switch metadata.Type {
+		switch mType {
 		case model.MetricTypeCounter, model.MetricTypeHistogram:
 			// Proceed to synthesis.
 		default:
@@ -491,4 +509,155 @@ func (sl *scrapeLoop) checkAndSynthesizeStartTime(
 	}
 
 	return st, val, h, fh, skipAppend, c
+}
+
+const (
+	unknownGaugeSuffix   = "/unknown"
+	unknownCounterSuffix = "/unknown:counter"
+)
+
+type unknownSeriesState struct {
+	gaugeLset   labels.Labels
+	counterLset labels.Labels
+	counterRef  storage.SeriesRef
+}
+
+func (u *unknownSeriesState) forEachStale(gaugeRef storage.SeriesRef, f func(storage.SeriesRef, labels.Labels) bool) bool {
+	if !f(gaugeRef, u.gaugeLset) {
+		return false
+	}
+	if u.counterRef != 0 && !f(u.counterRef, u.counterLset) {
+		return false
+	}
+	return true
+}
+
+// tryAppendSplitUnknown splits untyped float series into '<name>/unknown' (gauge)
+// and '<name>/unknown:counter' (cumulative counter with optional ST synthesis).
+// It returns split=false when the series has a known type so the caller can append it normally.
+func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
+	app storage.AppenderV2,
+	unknownLb **labels.Builder,
+	ref storage.SeriesRef,
+	lset labels.Labels,
+	st, t int64,
+	val float64,
+	appOpts *storage.AOptions,
+	lastMFName []byte,
+	lastMeta **metaEntry,
+	ce **cacheEntry,
+	seriesCached *bool,
+	stState *stCache,
+) (bool, storage.SeriesRef, *stCache, *unknownSeriesState, error) {
+	effectiveType := model.MetricTypeUnknown
+	if meta := *lastMeta; meta != nil && meta.Type != model.MetricTypeUnknown {
+		if !sl.appendMetadataToWAL && (!*seriesCached || (*ce).unknown != nil) && !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, meta.Type) {
+			// When appendMetadataToWAL is true, the caller already verified isSeriesPartOfFamily.
+			// When appendMetadataToWAL is false, verify family membership for new or previously unknown series
+			// so missing TYPE metadata on subsequent series is not mistaken for the previous family's type.
+			*lastMeta = nil
+		} else {
+			effectiveType = meta.Type
+		}
+	}
+	if !*seriesCached || (effectiveType == model.MetricTypeUnknown && (*ce).unknown == nil) {
+		if typeLabel := lset.Get(model.MetricTypeLabel); typeLabel != "" {
+			effectiveType = model.MetricType(typeLabel)
+		}
+	}
+
+	if effectiveType != model.MetricTypeUnknown {
+		if sl.appendMetadataToWAL && (appOpts.Metadata.Type == "" || appOpts.Metadata.Type == model.MetricTypeUnknown) {
+			appOpts.Metadata.Type = effectiveType
+		}
+		if *seriesCached && (*ce).unknown != nil {
+			// The metric's type changed from unknown to a known type across scrapes.
+			// Reset cache state so the previous split series get marked stale.
+			*ce = nil
+			*seriesCached = false
+			ref = 0
+		}
+		return false, ref, stState, nil, nil
+	}
+
+	if *seriesCached && (*ce).unknown == nil {
+		// The metric's type changed from a known type to unknown across scrapes.
+		// Reset cache state so the previous typed series gets marked stale.
+		*ce = nil
+		*seriesCached = false
+		ref = 0
+	}
+
+	var state *unknownSeriesState
+	if *seriesCached {
+		state = (*ce).unknown
+	} else {
+		if *unknownLb == nil {
+			*unknownLb = labels.NewBuilderWithSymbolTable(sl.symbolTable)
+		}
+		lb := *unknownLb
+		// Build the suffixed label sets after sampleMutator and label validation
+		// so '/' and ':' in the suffixes do not fail legacy metric name validation.
+		metricName := lset.Get(model.MetricNameLabel)
+		lb.Reset(lset)
+		lb.Set(model.MetricNameLabel, metricName+unknownGaugeSuffix)
+		if sl.enableTypeAndUnitLabels {
+			lb.Set(model.MetricTypeLabel, string(model.MetricTypeGauge))
+		}
+		gaugeLset := lb.Labels()
+
+		lb.Reset(lset)
+		lb.Set(model.MetricNameLabel, metricName+unknownCounterSuffix)
+		if sl.enableTypeAndUnitLabels {
+			lb.Set(model.MetricTypeLabel, string(model.MetricTypeCounter))
+		}
+		counterLset := lb.Labels()
+
+		state = &unknownSeriesState{
+			gaugeLset:   gaugeLset,
+			counterLset: counterLset,
+		}
+	}
+
+	gaugeOpts := *appOpts
+	gaugeOpts.Exemplars = nil
+	if sl.appendMetadataToWAL {
+		gaugeOpts.Metadata.Type = model.MetricTypeGauge
+	}
+	ref, err := app.Append(ref, state.gaugeLset, 0, t, val, nil, nil, gaugeOpts)
+	if err != nil {
+		return true, ref, stState, state, err
+	}
+	if *ce != nil && ref != 0 {
+		(*ce).ref = ref
+	}
+
+	counterST := st
+	counterVal := val
+	var skipCounterAppend bool
+	if sl.synthesizeST && counterST == 0 {
+		if *ce != nil && (*ce).st != nil {
+			stState = (*ce).st
+		} else {
+			stState = &stCache{}
+		}
+		counterVal, counterST, skipCounterAppend = stState.synthesizeFloat(val, t)
+	}
+	if !skipCounterAppend {
+		counterOpts := *appOpts
+		if sl.synthesizeST && st == 0 {
+			counterOpts.RejectOutOfOrder = true
+		}
+		if sl.appendMetadataToWAL {
+			counterOpts.Metadata.Type = model.MetricTypeCounter
+		}
+		counterRef, err := app.Append(state.counterRef, state.counterLset, counterST, t, counterVal, nil, nil, counterOpts)
+		if err != nil {
+			return true, ref, stState, state, err
+		}
+		if counterRef != 0 {
+			state.counterRef = counterRef
+		}
+	}
+	return true, ref, stState, state, nil
 }
