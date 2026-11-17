@@ -130,6 +130,8 @@ func (sl *scrapeLoopAppenderV2) append(b []byte, contentType string, ts time.Tim
 		e              exemplar.Exemplar // Escapes to heap so hoisted out of loop.
 		lastMeta       *metaEntry
 		lastMFName     []byte
+		parserLastType model.MetricType
+		parserLastUnit string
 		unknownLb      *labels.Builder
 	)
 
@@ -174,12 +176,14 @@ loop:
 			// TODO(bwplotka): Build meta entry directly instead of locking and updating the map. This will
 			// allow to properly update metadata when e.g unit was added, then removed;
 			lastMFName, lastMeta = sl.cache.setType(p.Type())
+			parserLastType = lastMeta.Type
 			continue
 		case textparse.EntryHelp:
 			lastMFName, lastMeta = sl.cache.setHelp(p.Help())
 			continue
 		case textparse.EntryUnit:
 			lastMFName, lastMeta = sl.cache.setUnit(p.Unit())
+			parserLastUnit = lastMeta.Unit
 			continue
 		case textparse.EntryComment:
 			continue
@@ -217,6 +221,13 @@ loop:
 			hash = ce.hash
 		} else {
 			p.Labels(&lset)
+			if sl.enableTypeAndUnitLabels {
+				var parsedMeta *metaEntry
+				if lastMeta != nil && isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, lastMeta.Type) {
+					parsedMeta = lastMeta
+				}
+				lset = stripLeakedTypeAndUnitLabels(lset, &unknownLb, sl.symbolTable, parsedMeta, parserLastType, parserLastUnit)
+			}
 			hash = lset.Hash()
 
 			// Hash label set as it is seen local to the target. Then add target labels
@@ -509,6 +520,45 @@ func (sl *scrapeLoop) checkAndSynthesizeStartTime(
 	}
 
 	return st, val, h, fh, skipAppend, c
+}
+
+// stripLeakedTypeAndUnitLabels removes __type__ and __unit__ labels that PromParser
+// or OpenMetricsParser carry over from a previous metric family when a subsequent
+// family omits # TYPE or # UNIT.
+func stripLeakedTypeAndUnitLabels(
+	lset labels.Labels,
+	lb **labels.Builder,
+	symbolTable *labels.SymbolTable,
+	seriesMeta *metaEntry,
+	parserLastType model.MetricType,
+	parserLastUnit string,
+) labels.Labels {
+	wantType := model.MetricTypeUnknown
+	wantUnit := ""
+	if seriesMeta != nil {
+		wantType = seriesMeta.Type
+		wantUnit = seriesMeta.Unit
+	}
+	stripType := wantType == model.MetricTypeUnknown &&
+		parserLastType != "" && parserLastType != model.MetricTypeUnknown &&
+		lset.Get(model.MetricTypeLabel) == string(parserLastType)
+	stripUnit := wantUnit == "" &&
+		parserLastUnit != "" &&
+		lset.Get(model.MetricUnitLabel) == parserLastUnit
+	if !stripType && !stripUnit {
+		return lset
+	}
+	if *lb == nil {
+		*lb = labels.NewBuilderWithSymbolTable(symbolTable)
+	}
+	(*lb).Reset(lset)
+	if stripType {
+		(*lb).Del(model.MetricTypeLabel)
+	}
+	if stripUnit {
+		(*lb).Del(model.MetricUnitLabel)
+	}
+	return (*lb).Labels()
 }
 
 const (
