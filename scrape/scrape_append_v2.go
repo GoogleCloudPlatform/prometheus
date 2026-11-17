@@ -287,6 +287,24 @@ loop:
 			}
 		}
 
+		var (
+			effectiveType = scrapedType
+			willSplit     bool
+		)
+		if sl.splitUnknownTypes && !isHistogram {
+			if seriesCached {
+				willSplit = splitState.unknown != nil
+			}
+			if !willSplit {
+				if typeLabel := lset.Get(model.MetricTypeLabel); typeLabel != "" {
+					effectiveType = model.MetricType(typeLabel)
+				}
+				if !seriesCached {
+					willSplit = effectiveType == model.MetricTypeUnknown
+				}
+			}
+		}
+
 		exemplars = exemplars[:0] // Reset and reuse the exemplar slice.
 
 		if seriesAlreadyScraped && parsedTimestamp == nil {
@@ -309,7 +327,7 @@ loop:
 			appOpts := storage.AOptions{}
 
 			// TODO(ridwanmsharif): Consider injecting a 0 value with the st == t here, instead of skipping an append.
-			if sl.synthesizeST && st == 0 {
+			if sl.synthesizeST && st == 0 && !willSplit {
 				st, val, h, fh, skipAppend, stCache = sl.checkAndSynthesizeStartTime(st, lset, preRelabelName, ce, lastMFName, val, h, fh, t)
 				appOpts.RejectOutOfOrder = true
 			}
@@ -351,14 +369,17 @@ loop:
 			//
 			// TODO(https://github.com/prometheus/prometheus/issues/17900): Optimize this, notably move this check to parsers that require this (ensuring parser
 			// interface always yields correct metadata), deliver OpenMetrics 2.0 that removes suffixes.
-			if sl.appendMetadataToWAL && lastMeta != nil {
+			if sl.appendMetadataToWAL {
 				if sl.splitUnknownTypes {
 					// seriesMeta was already verified against the pre-relabel metric name without clobbering lastMeta.
 					if seriesMeta != nil {
 						appOpts.MetricFamilyName = yoloString(lastMFName)
 						appOpts.Metadata = seriesMeta.Metadata
 					}
-				} else {
+					if !willSplit && effectiveType != "" && effectiveType != model.MetricTypeUnknown {
+						appOpts.Metadata.Type = effectiveType
+					}
+				} else if lastMeta != nil {
 					// In majority cases we can trust that the current series/histogram is matching the lastMeta and lastMFName.
 					// However, optional TYPE, etc metadata and broken OM text can break this, detect those cases here.
 					if !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, lastMeta.Type) {
@@ -373,10 +394,9 @@ loop:
 			}
 
 			// Note that even if append is skipped, we may still add to the cache to make sure we save stCache.
-			if sl.splitUnknownTypes && !isHistogram {
-				var split bool
-				split, ref, stCache, unknownState, err = sl.tryAppendSplitUnknown(app, &unknownLb, ref, lset, st, t, val, &appOpts, scrapedType, splitState.unknown, ce, seriesCached, stCache)
-				skipAppend = skipAppend || split
+			if willSplit {
+				ref, stCache, unknownState, err = sl.appendSplitUnknown(app, &unknownLb, ref, lset, st, t, val, &appOpts, splitState.unknown, ce)
+				skipAppend = true
 			}
 			if !skipAppend {
 				// Append sample to the storage.
@@ -531,10 +551,6 @@ func (sl *scrapeLoop) checkAndSynthesizeStartTime(
 	var skipAppend bool
 	var c *stCache
 
-	if sl.splitUnknownTypes && sl.cache.getUnknown(ce) != nil {
-		return st, val, h, fh, skipAppend, c
-	}
-
 	// TODO(https://github.com/prometheus/prometheus/issues/1790): Move isSeriesPartOfFamily inside parsers.
 	if ce == nil || ce.st == nil {
 		mType := model.MetricType(lset.Get(model.MetricTypeLabel))
@@ -640,10 +656,9 @@ func (u *unknownSeriesState) forEachStale(gaugeRef storage.SeriesRef, f func(sto
 	return true
 }
 
-// tryAppendSplitUnknown splits untyped float series into '<name>/unknown' (gauge)
+// appendSplitUnknown splits an untyped float series into '<name>/unknown' (gauge)
 // and '<name>/unknown:counter' (cumulative counter with optional ST synthesis).
-// It returns split=false when the series has a known type so the caller can append it normally.
-func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
+func (sl *scrapeLoopAppenderV2) appendSplitUnknown(
 	app storage.AppenderV2,
 	unknownLb **labels.Builder,
 	ref storage.SeriesRef,
@@ -651,38 +666,10 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 	st, t int64,
 	val float64,
 	appOpts *storage.AOptions,
-	scrapedType model.MetricType,
-	cachedUnknown *unknownSeriesState,
+	state *unknownSeriesState,
 	ce *cacheEntry,
-	seriesCached bool,
-	stState *stCache,
-) (bool, storage.SeriesRef, *stCache, *unknownSeriesState, error) {
-	var state *unknownSeriesState
-	if seriesCached {
-		if cachedUnknown == nil {
-			// Cached as a known type and scrapedType did not change across scrapes.
-			effectiveType := scrapedType
-			if typeLabel := lset.Get(model.MetricTypeLabel); typeLabel != "" {
-				effectiveType = model.MetricType(typeLabel)
-			}
-			if sl.appendMetadataToWAL && effectiveType != "" && effectiveType != model.MetricTypeUnknown {
-				appOpts.Metadata.Type = effectiveType
-			}
-			return false, ref, stState, nil, nil
-		}
-		state = cachedUnknown
-	} else {
-		effectiveType := scrapedType
-		if typeLabel := lset.Get(model.MetricTypeLabel); typeLabel != "" {
-			effectiveType = model.MetricType(typeLabel)
-		}
-		if effectiveType != model.MetricTypeUnknown {
-			if sl.appendMetadataToWAL && effectiveType != "" {
-				appOpts.Metadata.Type = effectiveType
-			}
-			return false, ref, stState, nil, nil
-		}
-
+) (storage.SeriesRef, *stCache, *unknownSeriesState, error) {
+	if state == nil {
 		if *unknownLb == nil {
 			*unknownLb = labels.NewBuilderWithSymbolTable(sl.symbolTable)
 		}
@@ -714,6 +701,7 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 		}
 	}
 
+	var stState *stCache
 	gaugeOpts := *appOpts
 	gaugeOpts.Exemplars = nil
 	if sl.appendMetadataToWAL {
@@ -721,7 +709,7 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 	}
 	ref, err := app.Append(ref, state.gaugeLset, 0, t, val, nil, nil, gaugeOpts)
 	if err != nil {
-		return true, ref, stState, state, err
+		return ref, stState, state, err
 	}
 	if ce != nil && ref != 0 {
 		ce.ref = ref
@@ -748,11 +736,11 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 		}
 		counterRef, err := app.Append(state.counterRef, state.counterLset, counterST, t, counterVal, nil, nil, counterOpts)
 		if err != nil {
-			return true, ref, stState, state, err
+			return ref, stState, state, err
 		}
 		if counterRef != 0 {
 			state.counterRef = counterRef
 		}
 	}
-	return true, ref, stState, state, nil
+	return ref, stState, state, nil
 }
