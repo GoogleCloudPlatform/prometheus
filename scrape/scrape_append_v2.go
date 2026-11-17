@@ -308,6 +308,11 @@ loop:
 
 		exemplars = exemplars[:0] // Reset and reuse the exemplar slice.
 
+		var prevCounterRef storage.SeriesRef
+		if splitState.unknown != nil {
+			prevCounterRef = splitState.unknown.counterRef
+		}
+
 		if seriesAlreadyScraped && parsedTimestamp == nil {
 			err = storage.ErrDuplicateSampleForTimestamp
 		} else {
@@ -445,6 +450,9 @@ loop:
 			if sampleLimitErr == nil && bucketLimitErr == nil {
 				seriesAdded++
 			}
+		}
+		if sampleAdded && unknownState != nil && prevCounterRef == 0 && unknownState.counterRef != 0 && sampleLimitErr == nil && bucketLimitErr == nil {
+			seriesAdded++
 		}
 		if ce != nil && sampleAdded && sl.splitUnknownTypes && (!seriesCached || !hasSplitState) {
 			renamedPreRelabel := ""
