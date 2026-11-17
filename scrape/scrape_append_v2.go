@@ -211,22 +211,36 @@ loop:
 		}
 		ce, seriesCached, seriesAlreadyScraped := sl.cache.get(met)
 		var (
-			ref  storage.SeriesRef
-			hash uint64
+			ref            storage.SeriesRef
+			hash           uint64
+			preRelabelName string
+			seriesMeta     *metaEntry
 		)
 
 		if seriesCached {
 			ref = ce.ref
 			lset = ce.lset
 			hash = ce.hash
+			if sl.splitUnknownTypes {
+				splitState, _ := sl.cache.getSplitState(ce)
+				preRelabelName = splitState.preRelabelName
+				if preRelabelName == "" {
+					preRelabelName = lset.Get(model.MetricNameLabel)
+				}
+				if lastMeta != nil && isSeriesPartOfFamily(preRelabelName, lastMFName, lastMeta.Type) {
+					seriesMeta = lastMeta
+				}
+			}
 		} else {
 			p.Labels(&lset)
-			if sl.enableTypeAndUnitLabels {
-				var parsedMeta *metaEntry
-				if lastMeta != nil && isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, lastMeta.Type) {
-					parsedMeta = lastMeta
+			if sl.enableTypeAndUnitLabels || sl.splitUnknownTypes {
+				preRelabelName = lset.Get(model.MetricNameLabel)
+				if lastMeta != nil && isSeriesPartOfFamily(preRelabelName, lastMFName, lastMeta.Type) {
+					seriesMeta = lastMeta
 				}
-				lset = stripLeakedTypeAndUnitLabels(lset, &unknownLb, sl.symbolTable, parsedMeta, parserLastType, parserLastUnit)
+				if sl.enableTypeAndUnitLabels {
+					lset = stripLeakedTypeAndUnitLabels(lset, &unknownLb, sl.symbolTable, seriesMeta, parserLastType, parserLastUnit)
+				}
 			}
 			hash = lset.Hash()
 
@@ -279,7 +293,7 @@ loop:
 
 			// TODO(ridwanmsharif): Consider injecting a 0 value with the st == t here, instead of skipping an append.
 			if sl.synthesizeST && st == 0 {
-				st, val, h, fh, skipAppend, stCache = sl.checkAndSynthesizeStartTime(st, lset, ce, lastMFName, val, h, fh, t)
+				st, val, h, fh, skipAppend, stCache = sl.checkAndSynthesizeStartTime(st, lset, preRelabelName, ce, lastMFName, val, h, fh, t)
 				appOpts.RejectOutOfOrder = true
 			}
 
@@ -321,22 +335,30 @@ loop:
 			// TODO(https://github.com/prometheus/prometheus/issues/17900): Optimize this, notably move this check to parsers that require this (ensuring parser
 			// interface always yields correct metadata), deliver OpenMetrics 2.0 that removes suffixes.
 			if sl.appendMetadataToWAL && lastMeta != nil {
-				// In majority cases we can trust that the current series/histogram is matching the lastMeta and lastMFName.
-				// However, optional TYPE, etc metadata and broken OM text can break this, detect those cases here.
-				if !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, lastMeta.Type) {
-					lastMeta = nil // Don't pass knowingly broken metadata, now, nor on the next line.
-				}
-				if lastMeta != nil {
-					// Metric family name has the same source as metadata.
-					appOpts.MetricFamilyName = yoloString(lastMFName)
-					appOpts.Metadata = lastMeta.Metadata
+				if sl.splitUnknownTypes {
+					// seriesMeta was already verified against the pre-relabel metric name without clobbering lastMeta.
+					if seriesMeta != nil {
+						appOpts.MetricFamilyName = yoloString(lastMFName)
+						appOpts.Metadata = seriesMeta.Metadata
+					}
+				} else {
+					// In majority cases we can trust that the current series/histogram is matching the lastMeta and lastMFName.
+					// However, optional TYPE, etc metadata and broken OM text can break this, detect those cases here.
+					if !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, lastMeta.Type) {
+						lastMeta = nil // Don't pass knowingly broken metadata, now, nor on the next line.
+					}
+					if lastMeta != nil {
+						// Metric family name has the same source as metadata.
+						appOpts.MetricFamilyName = yoloString(lastMFName)
+						appOpts.Metadata = lastMeta.Metadata
+					}
 				}
 			}
 
 			// Note that even if append is skipped, we may still add to the cache to make sure we save stCache.
 			if sl.splitUnknownTypes && !isHistogram {
 				var split bool
-				split, ref, stCache, unknownState, err = sl.tryAppendSplitUnknown(app, &unknownLb, ref, lset, st, t, val, &appOpts, lastMFName, &lastMeta, &ce, &seriesCached, stCache)
+				split, ref, stCache, unknownState, err = sl.tryAppendSplitUnknown(app, &unknownLb, ref, lset, st, t, val, &appOpts, seriesMeta, &ce, &seriesCached, stCache)
 				skipAppend = skipAppend || split
 			}
 			if !skipAppend {
@@ -372,8 +394,17 @@ loop:
 				seriesAdded++
 			}
 		}
-		if ce != nil && sampleAdded && unknownState != nil {
-			sl.cache.setSplitState(ce, splitCacheEntry{unknown: unknownState})
+		if ce != nil && sampleAdded && sl.splitUnknownTypes {
+			renamedPreRelabel := ""
+			if preRelabelName != lset.Get(model.MetricNameLabel) {
+				renamedPreRelabel = preRelabelName
+			}
+			if unknownState != nil || renamedPreRelabel != "" {
+				sl.cache.setSplitState(ce, splitCacheEntry{
+					preRelabelName: renamedPreRelabel,
+					unknown:        unknownState,
+				})
+			}
 		}
 
 		if ce != nil && sl.synthesizeST {
@@ -473,6 +504,7 @@ func (sl *scrapeLoopAppenderV2) addReportSample(s reportSample, t int64, v float
 func (sl *scrapeLoop) checkAndSynthesizeStartTime(
 	st int64,
 	lset labels.Labels,
+	preRelabelName string,
 	ce *cacheEntry,
 	lastMFName []byte,
 	val float64,
@@ -491,8 +523,12 @@ func (sl *scrapeLoop) checkAndSynthesizeStartTime(
 	if ce == nil || ce.st == nil {
 		mType := model.MetricType(lset.Get(model.MetricTypeLabel))
 		if mType == "" {
+			metricName := preRelabelName
+			if metricName == "" {
+				metricName = lset.Get(model.MetricNameLabel)
+			}
 			metadata, ok := sl.cache.GetMetadata(string(lastMFName))
-			if !ok || !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, metadata.Type) {
+			if !ok || !isSeriesPartOfFamily(metricName, lastMFName, metadata.Type) {
 				return st, val, h, fh, skipAppend, c
 			}
 			mType = metadata.Type
@@ -567,7 +603,8 @@ const (
 )
 
 type splitCacheEntry struct {
-	unknown *unknownSeriesState
+	preRelabelName string // Non-empty only when sampleMutator changed __name__.
+	unknown        *unknownSeriesState
 }
 
 type unknownSeriesState struct {
@@ -597,8 +634,7 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 	st, t int64,
 	val float64,
 	appOpts *storage.AOptions,
-	lastMFName []byte,
-	lastMeta **metaEntry,
+	seriesMeta *metaEntry,
 	ce **cacheEntry,
 	seriesCached *bool,
 	stState *stCache,
@@ -609,15 +645,8 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 	}
 
 	effectiveType := model.MetricTypeUnknown
-	if meta := *lastMeta; meta != nil && meta.Type != model.MetricTypeUnknown {
-		if !sl.appendMetadataToWAL && (!*seriesCached || cachedUnknown != nil) && !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, meta.Type) {
-			// When appendMetadataToWAL is true, the caller already verified isSeriesPartOfFamily.
-			// When appendMetadataToWAL is false, verify family membership for new or previously unknown series
-			// so missing TYPE metadata on subsequent series is not mistaken for the previous family's type.
-			*lastMeta = nil
-		} else {
-			effectiveType = meta.Type
-		}
+	if seriesMeta != nil && seriesMeta.Type != model.MetricTypeUnknown {
+		effectiveType = seriesMeta.Type
 	}
 	if !*seriesCached || (effectiveType == model.MetricTypeUnknown && cachedUnknown == nil) {
 		if typeLabel := lset.Get(model.MetricTypeLabel); typeLabel != "" {
