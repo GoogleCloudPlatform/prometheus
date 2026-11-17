@@ -234,9 +234,10 @@ loop:
 					seriesMeta = lastMeta
 					scrapedType = seriesMeta.Type
 				}
-				if !isHistogram && hasSplitState && scrapedType != splitState.scrapedType {
-					// The scraped metric type changed across scrapes. Invalidate the cache hit so
-					// labels (including __type__) and relabeling are rebuilt and the old series gets marked stale.
+				if (hasSplitState && scrapedType != splitState.scrapedType) || (isHistogram && splitState.unknown != nil) {
+					// The scraped metric type changed across scrapes (including untyped float <-> native histogram).
+					// Invalidate the cache hit so labels (including __type__) and relabeling are rebuilt
+					// and the old series gets marked stale.
 					ce = nil
 					seriesCached = false
 					ref = 0
