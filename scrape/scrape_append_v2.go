@@ -396,8 +396,22 @@ loop:
 
 			// Note that even if append is skipped, we may still add to the cache to make sure we save stCache.
 			if willSplit {
-				ref, stCache, unknownState, err = sl.appendSplitUnknown(app, &unknownLb, ref, lset, st, t, val, &appOpts, splitState.unknown, ce)
+				var counterErr error
+				ref, stCache, unknownState, err, counterErr = sl.appendSplitUnknown(app, &unknownLb, ref, lset, st, t, val, &appOpts, splitState.unknown, ce)
 				skipAppend = true
+				if err == nil && counterErr != nil {
+					if errors.Is(counterErr, errSampleLimit) || errors.Is(counterErr, errBucketLimit) {
+						err = counterErr
+					} else {
+						var counterAdded bool
+						counterAdded, err = sl.checkAddError(met, exemplars, counterErr, &sampleLimitErr, &bucketLimitErr, &appErrs)
+						if err == nil && !counterAdded {
+							// The gauge sample already succeeded and will commit, so keep the series
+							// cached and tracked for staleness while resetting counter ST synthesis state.
+							stCache = nil
+						}
+					}
+				}
 			}
 			if !skipAppend {
 				// Append sample to the storage.
@@ -659,6 +673,8 @@ func (u *unknownSeriesState) forEachStale(gaugeRef storage.SeriesRef, f func(sto
 
 // appendSplitUnknown splits an untyped float series into '<name>/unknown' (gauge)
 // and '<name>/unknown:counter' (cumulative counter with optional ST synthesis).
+// It returns gaugeErr and counterErr separately so callers can keep a committed gauge
+// cached and staleness-tracked when only the counter append fails with a recoverable error.
 func (sl *scrapeLoopAppenderV2) appendSplitUnknown(
 	app storage.AppenderV2,
 	unknownLb **labels.Builder,
@@ -669,7 +685,7 @@ func (sl *scrapeLoopAppenderV2) appendSplitUnknown(
 	appOpts *storage.AOptions,
 	state *unknownSeriesState,
 	ce *cacheEntry,
-) (storage.SeriesRef, *stCache, *unknownSeriesState, error) {
+) (storage.SeriesRef, *stCache, *unknownSeriesState, error, error) {
 	if state == nil {
 		if *unknownLb == nil {
 			*unknownLb = labels.NewBuilderWithSymbolTable(sl.symbolTable)
@@ -708,12 +724,12 @@ func (sl *scrapeLoopAppenderV2) appendSplitUnknown(
 	if sl.appendMetadataToWAL {
 		gaugeOpts.Metadata.Type = model.MetricTypeGauge
 	}
-	ref, err := app.Append(ref, state.gaugeLset, 0, t, val, nil, nil, gaugeOpts)
-	if err != nil {
-		return ref, stState, state, err
-	}
+	ref, gaugeErr := app.Append(ref, state.gaugeLset, 0, t, val, nil, nil, gaugeOpts)
 	if ce != nil && ref != 0 {
 		ce.ref = ref
+	}
+	if gaugeErr != nil {
+		return ref, stState, state, gaugeErr, nil
 	}
 
 	counterST := st
@@ -727,6 +743,7 @@ func (sl *scrapeLoopAppenderV2) appendSplitUnknown(
 		}
 		counterVal, counterST, skipCounterAppend = stState.synthesizeFloat(val, t)
 	}
+	var counterErr error
 	if !skipCounterAppend {
 		counterOpts := *appOpts
 		if sl.synthesizeST && st == 0 {
@@ -735,13 +752,13 @@ func (sl *scrapeLoopAppenderV2) appendSplitUnknown(
 		if sl.appendMetadataToWAL {
 			counterOpts.Metadata.Type = model.MetricTypeCounter
 		}
-		counterRef, err := app.Append(state.counterRef, state.counterLset, counterST, t, counterVal, nil, nil, counterOpts)
-		if err != nil {
-			return ref, stState, state, err
-		}
+		var counterRef storage.SeriesRef
+		counterRef, counterErr = app.Append(state.counterRef, state.counterLset, counterST, t, counterVal, nil, nil, counterOpts)
+		// Save counterRef before returning counterErr so partial errors (such as exemplar errors)
+		// still retain the series reference for staleness markers.
 		if counterRef != 0 {
 			state.counterRef = counterRef
 		}
 	}
-	return ref, stState, state, nil
+	return ref, stState, state, nil, counterErr
 }
