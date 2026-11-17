@@ -215,6 +215,9 @@ loop:
 			hash           uint64
 			preRelabelName string
 			seriesMeta     *metaEntry
+			scrapedType    = model.MetricTypeUnknown
+			splitState     splitCacheEntry
+			hasSplitState  bool
 		)
 
 		if seriesCached {
@@ -222,21 +225,35 @@ loop:
 			lset = ce.lset
 			hash = ce.hash
 			if sl.splitUnknownTypes {
-				splitState, _ := sl.cache.getSplitState(ce)
+				splitState, hasSplitState = sl.cache.getSplitState(ce)
 				preRelabelName = splitState.preRelabelName
 				if preRelabelName == "" {
 					preRelabelName = lset.Get(model.MetricNameLabel)
 				}
 				if lastMeta != nil && isSeriesPartOfFamily(preRelabelName, lastMFName, lastMeta.Type) {
 					seriesMeta = lastMeta
+					scrapedType = seriesMeta.Type
+				}
+				if !isHistogram && hasSplitState && scrapedType != splitState.scrapedType {
+					// The scraped metric type changed across scrapes. Invalidate the cache hit so
+					// labels (including __type__) and relabeling are rebuilt and the old series gets marked stale.
+					ce = nil
+					seriesCached = false
+					ref = 0
+					splitState = splitCacheEntry{}
+					hasSplitState = false
 				}
 			}
-		} else {
+		}
+		if !seriesCached {
 			p.Labels(&lset)
 			if sl.enableTypeAndUnitLabels || sl.splitUnknownTypes {
 				preRelabelName = lset.Get(model.MetricNameLabel)
+				seriesMeta = nil
+				scrapedType = model.MetricTypeUnknown
 				if lastMeta != nil && isSeriesPartOfFamily(preRelabelName, lastMFName, lastMeta.Type) {
 					seriesMeta = lastMeta
+					scrapedType = seriesMeta.Type
 				}
 				if sl.enableTypeAndUnitLabels {
 					lset = stripLeakedTypeAndUnitLabels(lset, &unknownLb, sl.symbolTable, seriesMeta, parserLastType, parserLastUnit)
@@ -358,7 +375,7 @@ loop:
 			// Note that even if append is skipped, we may still add to the cache to make sure we save stCache.
 			if sl.splitUnknownTypes && !isHistogram {
 				var split bool
-				split, ref, stCache, unknownState, err = sl.tryAppendSplitUnknown(app, &unknownLb, ref, lset, st, t, val, &appOpts, seriesMeta, &ce, &seriesCached, stCache)
+				split, ref, stCache, unknownState, err = sl.tryAppendSplitUnknown(app, &unknownLb, ref, lset, st, t, val, &appOpts, scrapedType, splitState.unknown, ce, seriesCached, stCache)
 				skipAppend = skipAppend || split
 			}
 			if !skipAppend {
@@ -394,17 +411,16 @@ loop:
 				seriesAdded++
 			}
 		}
-		if ce != nil && sampleAdded && sl.splitUnknownTypes {
+		if ce != nil && sampleAdded && sl.splitUnknownTypes && (!seriesCached || !hasSplitState) {
 			renamedPreRelabel := ""
 			if preRelabelName != lset.Get(model.MetricNameLabel) {
 				renamedPreRelabel = preRelabelName
 			}
-			if unknownState != nil || renamedPreRelabel != "" {
-				sl.cache.setSplitState(ce, splitCacheEntry{
-					preRelabelName: renamedPreRelabel,
-					unknown:        unknownState,
-				})
-			}
+			sl.cache.setSplitState(ce, splitCacheEntry{
+				scrapedType:    scrapedType,
+				preRelabelName: renamedPreRelabel,
+				unknown:        unknownState,
+			})
 		}
 
 		if ce != nil && sl.synthesizeST {
@@ -603,6 +619,7 @@ const (
 )
 
 type splitCacheEntry struct {
+	scrapedType    model.MetricType
 	preRelabelName string // Non-empty only when sampleMutator changed __name__.
 	unknown        *unknownSeriesState
 }
@@ -634,52 +651,38 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 	st, t int64,
 	val float64,
 	appOpts *storage.AOptions,
-	seriesMeta *metaEntry,
-	ce **cacheEntry,
-	seriesCached *bool,
+	scrapedType model.MetricType,
+	cachedUnknown *unknownSeriesState,
+	ce *cacheEntry,
+	seriesCached bool,
 	stState *stCache,
 ) (bool, storage.SeriesRef, *stCache, *unknownSeriesState, error) {
-	var cachedUnknown *unknownSeriesState
-	if *seriesCached {
-		cachedUnknown = sl.cache.getUnknown(*ce)
-	}
-
-	effectiveType := model.MetricTypeUnknown
-	if seriesMeta != nil && seriesMeta.Type != model.MetricTypeUnknown {
-		effectiveType = seriesMeta.Type
-	}
-	if !*seriesCached || (effectiveType == model.MetricTypeUnknown && cachedUnknown == nil) {
+	var state *unknownSeriesState
+	if seriesCached {
+		if cachedUnknown == nil {
+			// Cached as a known type and scrapedType did not change across scrapes.
+			effectiveType := scrapedType
+			if typeLabel := lset.Get(model.MetricTypeLabel); typeLabel != "" {
+				effectiveType = model.MetricType(typeLabel)
+			}
+			if sl.appendMetadataToWAL && effectiveType != "" && effectiveType != model.MetricTypeUnknown {
+				appOpts.Metadata.Type = effectiveType
+			}
+			return false, ref, stState, nil, nil
+		}
+		state = cachedUnknown
+	} else {
+		effectiveType := scrapedType
 		if typeLabel := lset.Get(model.MetricTypeLabel); typeLabel != "" {
 			effectiveType = model.MetricType(typeLabel)
 		}
-	}
-
-	if effectiveType != model.MetricTypeUnknown {
-		if sl.appendMetadataToWAL && (appOpts.Metadata.Type == "" || appOpts.Metadata.Type == model.MetricTypeUnknown) {
-			appOpts.Metadata.Type = effectiveType
+		if effectiveType != model.MetricTypeUnknown {
+			if sl.appendMetadataToWAL && effectiveType != "" {
+				appOpts.Metadata.Type = effectiveType
+			}
+			return false, ref, stState, nil, nil
 		}
-		if *seriesCached && cachedUnknown != nil {
-			// The metric's type changed from unknown to a known type across scrapes.
-			// Reset cache state so the previous split series get marked stale.
-			*ce = nil
-			*seriesCached = false
-			ref = 0
-		}
-		return false, ref, stState, nil, nil
-	}
 
-	if *seriesCached && cachedUnknown == nil {
-		// The metric's type changed from a known type to unknown across scrapes.
-		// Reset cache state so the previous typed series gets marked stale.
-		*ce = nil
-		*seriesCached = false
-		ref = 0
-	}
-
-	var state *unknownSeriesState
-	if *seriesCached {
-		state = cachedUnknown
-	} else {
 		if *unknownLb == nil {
 			*unknownLb = labels.NewBuilderWithSymbolTable(sl.symbolTable)
 		}
@@ -691,6 +694,8 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 		lb.Set(model.MetricNameLabel, metricName+unknownGaugeSuffix)
 		if sl.enableTypeAndUnitLabels {
 			lb.Set(model.MetricTypeLabel, string(model.MetricTypeGauge))
+		} else {
+			lb.Del(model.MetricTypeLabel)
 		}
 		gaugeLset := lb.Labels()
 
@@ -698,6 +703,8 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 		lb.Set(model.MetricNameLabel, metricName+unknownCounterSuffix)
 		if sl.enableTypeAndUnitLabels {
 			lb.Set(model.MetricTypeLabel, string(model.MetricTypeCounter))
+		} else {
+			lb.Del(model.MetricTypeLabel)
 		}
 		counterLset := lb.Labels()
 
@@ -716,16 +723,16 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 	if err != nil {
 		return true, ref, stState, state, err
 	}
-	if *ce != nil && ref != 0 {
-		(*ce).ref = ref
+	if ce != nil && ref != 0 {
+		ce.ref = ref
 	}
 
 	counterST := st
 	counterVal := val
 	var skipCounterAppend bool
 	if sl.synthesizeST && counterST == 0 {
-		if *ce != nil && (*ce).st != nil {
-			stState = (*ce).st
+		if ce != nil && ce.st != nil {
+			stState = ce.st
 		} else {
 			stState = &stCache{}
 		}
