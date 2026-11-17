@@ -361,8 +361,8 @@ loop:
 				seriesAdded++
 			}
 		}
-		if ce != nil && sampleAdded {
-			ce.unknown = unknownState
+		if ce != nil && sampleAdded && unknownState != nil {
+			sl.cache.setSplitState(ce, splitCacheEntry{unknown: unknownState})
 		}
 
 		if ce != nil && sl.synthesizeST {
@@ -472,7 +472,7 @@ func (sl *scrapeLoop) checkAndSynthesizeStartTime(
 	var skipAppend bool
 	var c *stCache
 
-	if sl.splitUnknownTypes && ce != nil && ce.unknown != nil {
+	if sl.splitUnknownTypes && sl.cache.getUnknown(ce) != nil {
 		return st, val, h, fh, skipAppend, c
 	}
 
@@ -516,6 +516,10 @@ const (
 	unknownCounterSuffix = "/unknown:counter"
 )
 
+type splitCacheEntry struct {
+	unknown *unknownSeriesState
+}
+
 type unknownSeriesState struct {
 	gaugeLset   labels.Labels
 	counterLset labels.Labels
@@ -549,9 +553,14 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 	seriesCached *bool,
 	stState *stCache,
 ) (bool, storage.SeriesRef, *stCache, *unknownSeriesState, error) {
+	var cachedUnknown *unknownSeriesState
+	if *seriesCached {
+		cachedUnknown = sl.cache.getUnknown(*ce)
+	}
+
 	effectiveType := model.MetricTypeUnknown
 	if meta := *lastMeta; meta != nil && meta.Type != model.MetricTypeUnknown {
-		if !sl.appendMetadataToWAL && (!*seriesCached || (*ce).unknown != nil) && !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, meta.Type) {
+		if !sl.appendMetadataToWAL && (!*seriesCached || cachedUnknown != nil) && !isSeriesPartOfFamily(lset.Get(model.MetricNameLabel), lastMFName, meta.Type) {
 			// When appendMetadataToWAL is true, the caller already verified isSeriesPartOfFamily.
 			// When appendMetadataToWAL is false, verify family membership for new or previously unknown series
 			// so missing TYPE metadata on subsequent series is not mistaken for the previous family's type.
@@ -560,7 +569,7 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 			effectiveType = meta.Type
 		}
 	}
-	if !*seriesCached || (effectiveType == model.MetricTypeUnknown && (*ce).unknown == nil) {
+	if !*seriesCached || (effectiveType == model.MetricTypeUnknown && cachedUnknown == nil) {
 		if typeLabel := lset.Get(model.MetricTypeLabel); typeLabel != "" {
 			effectiveType = model.MetricType(typeLabel)
 		}
@@ -570,7 +579,7 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 		if sl.appendMetadataToWAL && (appOpts.Metadata.Type == "" || appOpts.Metadata.Type == model.MetricTypeUnknown) {
 			appOpts.Metadata.Type = effectiveType
 		}
-		if *seriesCached && (*ce).unknown != nil {
+		if *seriesCached && cachedUnknown != nil {
 			// The metric's type changed from unknown to a known type across scrapes.
 			// Reset cache state so the previous split series get marked stale.
 			*ce = nil
@@ -580,7 +589,7 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 		return false, ref, stState, nil, nil
 	}
 
-	if *seriesCached && (*ce).unknown == nil {
+	if *seriesCached && cachedUnknown == nil {
 		// The metric's type changed from a known type to unknown across scrapes.
 		// Reset cache state so the previous typed series gets marked stale.
 		*ce = nil
@@ -590,7 +599,7 @@ func (sl *scrapeLoopAppenderV2) tryAppendSplitUnknown(
 
 	var state *unknownSeriesState
 	if *seriesCached {
-		state = (*ce).unknown
+		state = cachedUnknown
 	} else {
 		if *unknownLb == nil {
 			*unknownLb = labels.NewBuilderWithSymbolTable(sl.symbolTable)
