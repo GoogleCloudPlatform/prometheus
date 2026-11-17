@@ -722,6 +722,7 @@ func (sl *scrapeLoopAppenderV2) appendSplitUnknown(
 	gaugeOpts := *appOpts
 	gaugeOpts.Exemplars = nil
 	if sl.appendMetadataToWAL {
+		gaugeOpts.MetricFamilyName = state.gaugeLset.Get(model.MetricNameLabel)
 		gaugeOpts.Metadata.Type = model.MetricTypeGauge
 	}
 	ref, gaugeErr := app.Append(ref, state.gaugeLset, 0, t, val, nil, nil, gaugeOpts)
@@ -750,6 +751,7 @@ func (sl *scrapeLoopAppenderV2) appendSplitUnknown(
 			counterOpts.RejectOutOfOrder = true
 		}
 		if sl.appendMetadataToWAL {
+			counterOpts.MetricFamilyName = state.counterLset.Get(model.MetricNameLabel)
 			counterOpts.Metadata.Type = model.MetricTypeCounter
 		}
 		var counterRef storage.SeriesRef
