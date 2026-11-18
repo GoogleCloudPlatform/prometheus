@@ -1464,6 +1464,10 @@ func makeTestCounters(n int) []byte {
 	return makeTestMetricFamily(n, "metric_b", "counter")
 }
 
+func makeTestUntyped(n int) []byte {
+	return makeTestMetricFamily(n, "metric_c", "untyped")
+}
+
 func makeTestFloatHistograms(n int) []byte {
 	var sb strings.Builder
 	sb.WriteString(`name: "test_float_hist"
@@ -1975,6 +1979,658 @@ test_metric 15
 	require.Equal(t, chunkenc.ValNone, seriesIt.Next())
 }
 
+func TestScrapeLoopAppend_SplitUnknownTypes(t *testing.T) {
+	ts := time.Now()
+
+	requireSample := func(
+		t *testing.T,
+		s teststorage.Sample,
+		wantLabels labels.Labels,
+		val float64,
+		ts, st int64,
+		isNaN bool,
+		wantType model.MetricType,
+		wantHelp, wantMF string,
+	) {
+		t.Helper()
+		require.Equal(t, wantLabels, s.L)
+		require.Equal(t, ts, s.T)
+		require.Equal(t, st, s.ST)
+		if isNaN {
+			require.True(t, value.IsStaleNaN(s.V))
+			return
+		}
+		require.Equal(t, val, s.V)
+		require.Equal(t, wantType, s.M.Type)
+		require.Equal(t, wantHelp, s.M.Help)
+		require.Equal(t, wantMF, s.MF)
+	}
+
+	for _, enableTypeLabels := range []bool{false, true} {
+		for _, appendMetadata := range []bool{false, true} {
+			for _, synthesizeST := range []bool{false, true} {
+				t.Run(fmt.Sprintf("enableTypeAndUnitLabels=%t/appendMetadataToWAL=%t/synthesizeST=%t", enableTypeLabels, appendMetadata, synthesizeST), func(t *testing.T) {
+					s := teststorage.New(t)
+					appTest := teststorage.NewAppendable().Then(s)
+
+					sl, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+						sl.synthesizeST = synthesizeST
+						sl.parseST = true
+						sl.splitUnknownTypes = true
+						sl.appendMetadataToWAL = appendMetadata
+						sl.enableTypeAndUnitLabels = enableTypeLabels
+						sl.validationScheme = model.LegacyValidation
+						origMutator := sl.sampleMutator
+						sl.sampleMutator = func(l labels.Labels) labels.Labels {
+							l = origMutator(l)
+							lb := labels.NewBuilder(l)
+							switch l.Get(model.MetricNameLabel) {
+							case "relabeled_counter":
+								lb.Set(model.MetricTypeLabel, string(model.MetricTypeCounter))
+								return lb.Labels()
+							case "relabeled_unknown":
+								lb.Set(model.MetricTypeLabel, string(model.MetricTypeUnknown))
+								return lb.Labels()
+							case "renamed_counter_src":
+								lb.Set(model.MetricNameLabel, "renamed_counter_dst")
+								return lb.Labels()
+							}
+							return l
+						}
+					})
+
+					wantLset := func(name string, mt model.MetricType, forceType bool, extra ...string) labels.Labels {
+						kv := []string{model.MetricNameLabel, name}
+						if (enableTypeLabels || forceType) && mt != "" {
+							kv = append(kv, model.MetricTypeLabel, string(mt))
+						}
+						kv = append(kv, extra...)
+						return labels.FromStrings(kv...)
+					}
+					wantMetaType := func(mt model.MetricType) model.MetricType {
+						if appendMetadata {
+							return mt
+						}
+						return ""
+					}
+					wantMetaHelp := func(h string) string {
+						if appendMetadata {
+							return h
+						}
+						return ""
+					}
+					wantMetaMF := func(mf string) string {
+						if appendMetadata {
+							return mf
+						}
+						return ""
+					}
+
+					// First Scrape:
+					// - typed_counter (# TYPE counter) -> not split.
+					// - untyped_after_counter (no TYPE, immediately after counter) -> split; must not inherit counter type.
+					// - disappears_before_counter (no TYPE) -> split; disappears on Scrape 2 to test staleness when counterRef==0.
+					// - typed_gauge (# TYPE gauge) -> not split.
+					// - explicit_unknown (# HELP + # TYPE untyped) -> split, preserving Help.
+					// - relabeled_counter (__type__="counter" set by relabeling) -> not split.
+					// - relabeled_unknown (# TYPE gauge overridden to __type__="unknown") -> split across all scrapes.
+					// - renamed_counter_src (# TYPE counter renamed to renamed_counter_dst) -> not split.
+					scrapeA := []byte(`# TYPE typed_counter counter
+typed_counter 5
+untyped_after_counter{foo="bar"} 10
+disappears_before_counter 3
+# TYPE typed_gauge gauge
+typed_gauge 42
+# HELP explicit_unknown some help
+# TYPE explicit_unknown untyped
+explicit_unknown 20
+relabeled_counter 7
+# TYPE relabeled_unknown gauge
+relabeled_unknown 30
+# TYPE renamed_counter_src counter
+renamed_counter_src 100
+`)
+					app := sl.appender()
+					total, added, seriesAdded, err := app.append(scrapeA, "text/plain; version=0.0.4", ts)
+					require.NoError(t, err)
+					require.NoError(t, app.Commit())
+					require.Equal(t, 8, total)
+					require.Equal(t, 8, added)
+
+					got := appTest.ResultSamples()
+					if synthesizeST {
+						require.Equal(t, 8, seriesAdded) // 8 input series cached (4 split gauges + 1 gauge + 3 anchored counters).
+						require.Len(t, got, 5)
+						requireSample(t, got[0], wantLset("untyped_after_counter/unknown", model.MetricTypeGauge, false, "foo", "bar"), 10, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("untyped_after_counter/unknown"))
+						requireSample(t, got[1], wantLset("disappears_before_counter/unknown", model.MetricTypeGauge, false), 3, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("disappears_before_counter/unknown"))
+						requireSample(t, got[2], wantLset("typed_gauge", model.MetricTypeGauge, false), 42, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("typed_gauge"))
+						requireSample(t, got[3], wantLset("explicit_unknown/unknown", model.MetricTypeGauge, false), 20, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), wantMetaHelp("some help"), wantMetaMF("explicit_unknown/unknown"))
+						requireSample(t, got[4], wantLset("relabeled_unknown/unknown", model.MetricTypeGauge, false), 30, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("relabeled_unknown/unknown"))
+					} else {
+						require.Equal(t, 12, seriesAdded) // 4 split series x 2 + 4 non-split series.
+						require.Len(t, got, 12)
+						requireSample(t, got[0], wantLset("typed_counter", model.MetricTypeCounter, false), 5, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("typed_counter"))
+						requireSample(t, got[1], wantLset("untyped_after_counter/unknown", model.MetricTypeGauge, false, "foo", "bar"), 10, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("untyped_after_counter/unknown"))
+						requireSample(t, got[2], wantLset("untyped_after_counter/unknown:counter", model.MetricTypeCounter, false, "foo", "bar"), 10, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("untyped_after_counter/unknown:counter"))
+						requireSample(t, got[3], wantLset("disappears_before_counter/unknown", model.MetricTypeGauge, false), 3, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("disappears_before_counter/unknown"))
+						requireSample(t, got[4], wantLset("disappears_before_counter/unknown:counter", model.MetricTypeCounter, false), 3, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("disappears_before_counter/unknown:counter"))
+						requireSample(t, got[5], wantLset("typed_gauge", model.MetricTypeGauge, false), 42, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("typed_gauge"))
+						requireSample(t, got[6], wantLset("explicit_unknown/unknown", model.MetricTypeGauge, false), 20, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), wantMetaHelp("some help"), wantMetaMF("explicit_unknown/unknown"))
+						requireSample(t, got[7], wantLset("explicit_unknown/unknown:counter", model.MetricTypeCounter, false), 20, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeCounter), wantMetaHelp("some help"), wantMetaMF("explicit_unknown/unknown:counter"))
+						requireSample(t, got[8], wantLset("relabeled_counter", model.MetricTypeCounter, true), 7, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeCounter), "", "")
+						requireSample(t, got[9], wantLset("relabeled_unknown/unknown", model.MetricTypeGauge, false), 30, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("relabeled_unknown/unknown"))
+						requireSample(t, got[10], wantLset("relabeled_unknown/unknown:counter", model.MetricTypeCounter, false), 30, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("relabeled_unknown/unknown:counter"))
+						requireSample(t, got[11], wantLset("renamed_counter_dst", model.MetricTypeCounter, false), 100, timestamp.FromTime(ts), 0, false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("renamed_counter_src"))
+					}
+
+					// Second Scrape: disappears_before_counter disappears; explicit_unknown resets 20 -> 12.
+					prevLen := len(got)
+					ts2 := ts.Add(time.Second)
+					scrapeB := []byte(`# TYPE typed_counter counter
+typed_counter 8
+untyped_after_counter{foo="bar"} 15
+# TYPE typed_gauge gauge
+typed_gauge 43
+# HELP explicit_unknown some help
+# TYPE explicit_unknown untyped
+explicit_unknown 12
+relabeled_counter 11
+# TYPE relabeled_unknown gauge
+relabeled_unknown 35
+# TYPE renamed_counter_src counter
+renamed_counter_src 110
+`)
+					app = sl.appender()
+					total, added, seriesAdded, err = app.append(scrapeB, "text/plain; version=0.0.4", ts2)
+					require.NoError(t, err)
+					require.NoError(t, app.Commit())
+					require.Equal(t, 7, total)
+					require.Equal(t, 7, added)
+
+					got = appTest.ResultSamples()[prevLen:]
+					if synthesizeST {
+						require.Equal(t, 3, seriesAdded) // 3 newly appended /unknown:counter series.
+						// 10 live samples + 1 StaleNaN for disappears_before_counter/unknown only (counterRef was 0).
+						require.Len(t, got, 11)
+						requireSample(t, got[0], wantLset("typed_counter", model.MetricTypeCounter, false), 3, timestamp.FromTime(ts2), timestamp.FromTime(ts), false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("typed_counter"))
+						requireSample(t, got[1], wantLset("untyped_after_counter/unknown", model.MetricTypeGauge, false, "foo", "bar"), 15, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("untyped_after_counter/unknown"))
+						requireSample(t, got[2], wantLset("untyped_after_counter/unknown:counter", model.MetricTypeCounter, false, "foo", "bar"), 5, timestamp.FromTime(ts2), timestamp.FromTime(ts), false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("untyped_after_counter/unknown:counter"))
+						requireSample(t, got[3], wantLset("typed_gauge", model.MetricTypeGauge, false), 43, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("typed_gauge"))
+						requireSample(t, got[4], wantLset("explicit_unknown/unknown", model.MetricTypeGauge, false), 12, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeGauge), wantMetaHelp("some help"), wantMetaMF("explicit_unknown/unknown"))
+						requireSample(t, got[5], wantLset("explicit_unknown/unknown:counter", model.MetricTypeCounter, false), 12, timestamp.FromTime(ts2), timestamp.FromTime(ts2)-1, false, wantMetaType(model.MetricTypeCounter), wantMetaHelp("some help"), wantMetaMF("explicit_unknown/unknown:counter"))
+						requireSample(t, got[6], wantLset("relabeled_counter", model.MetricTypeCounter, true), 4, timestamp.FromTime(ts2), timestamp.FromTime(ts), false, wantMetaType(model.MetricTypeCounter), "", "")
+						requireSample(t, got[7], wantLset("relabeled_unknown/unknown", model.MetricTypeGauge, false), 35, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("relabeled_unknown/unknown"))
+						requireSample(t, got[8], wantLset("relabeled_unknown/unknown:counter", model.MetricTypeCounter, false), 5, timestamp.FromTime(ts2), timestamp.FromTime(ts), false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("relabeled_unknown/unknown:counter"))
+						requireSample(t, got[9], wantLset("renamed_counter_dst", model.MetricTypeCounter, false), 10, timestamp.FromTime(ts2), timestamp.FromTime(ts), false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("renamed_counter_src"))
+						requireSample(t, got[10], wantLset("disappears_before_counter/unknown", model.MetricTypeGauge, false), 0, timestamp.FromTime(ts2), 0, true, "", "", "")
+					} else {
+						require.Equal(t, 0, seriesAdded)
+						// 10 live samples + 2 StaleNaNs for disappears_before_counter (/unknown and /unknown:counter).
+						require.Len(t, got, 12)
+						requireSample(t, got[0], wantLset("typed_counter", model.MetricTypeCounter, false), 8, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("typed_counter"))
+						requireSample(t, got[1], wantLset("untyped_after_counter/unknown", model.MetricTypeGauge, false, "foo", "bar"), 15, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("untyped_after_counter/unknown"))
+						requireSample(t, got[2], wantLset("untyped_after_counter/unknown:counter", model.MetricTypeCounter, false, "foo", "bar"), 15, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("untyped_after_counter/unknown:counter"))
+						requireSample(t, got[4], wantLset("explicit_unknown/unknown", model.MetricTypeGauge, false), 12, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeGauge), wantMetaHelp("some help"), wantMetaMF("explicit_unknown/unknown"))
+						requireSample(t, got[5], wantLset("explicit_unknown/unknown:counter", model.MetricTypeCounter, false), 12, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeCounter), wantMetaHelp("some help"), wantMetaMF("explicit_unknown/unknown:counter"))
+						requireSample(t, got[7], wantLset("relabeled_unknown/unknown", model.MetricTypeGauge, false), 35, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("relabeled_unknown/unknown"))
+						requireSample(t, got[8], wantLset("relabeled_unknown/unknown:counter", model.MetricTypeCounter, false), 35, timestamp.FromTime(ts2), 0, false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("relabeled_unknown/unknown:counter"))
+						requireSample(t, got[10], wantLset("disappears_before_counter/unknown", model.MetricTypeGauge, false), 0, timestamp.FromTime(ts2), 0, true, "", "", "")
+						requireSample(t, got[11], wantLset("disappears_before_counter/unknown:counter", model.MetricTypeCounter, false), 0, timestamp.FromTime(ts2), 0, true, "", "", "")
+					}
+
+					// Third Scrape: untyped_after_counter disappears -> both /unknown and /unknown:counter get StaleNaN.
+					prevLen = len(appTest.ResultSamples())
+					ts3 := ts2.Add(time.Second)
+					scrapeC := []byte(`# TYPE typed_counter counter
+typed_counter 9
+# TYPE typed_gauge gauge
+typed_gauge 44
+# HELP explicit_unknown some help
+# TYPE explicit_unknown untyped
+explicit_unknown 14
+relabeled_counter 12
+# TYPE relabeled_unknown gauge
+relabeled_unknown 40
+# TYPE renamed_counter_src counter
+renamed_counter_src 115
+`)
+					app = sl.appender()
+					_, _, seriesAdded, err = app.append(scrapeC, "text/plain; version=0.0.4", ts3)
+					require.NoError(t, err)
+					require.NoError(t, app.Commit())
+					require.Equal(t, 0, seriesAdded)
+
+					got = appTest.ResultSamples()[prevLen:]
+					require.Len(t, got, 10)
+					requireSample(t, got[8], wantLset("untyped_after_counter/unknown", model.MetricTypeGauge, false, "foo", "bar"), 0, timestamp.FromTime(ts3), 0, true, "", "", "")
+					requireSample(t, got[9], wantLset("untyped_after_counter/unknown:counter", model.MetricTypeCounter, false, "foo", "bar"), 0, timestamp.FromTime(ts3), 0, true, "", "", "")
+				})
+			}
+		}
+	}
+
+	// Cross-scrape type transitions: counter -> unknown, gauge -> dropped TYPE after typed family, unknown -> counter.
+	for _, enableTypeLabels := range []bool{false, true} {
+		for _, appendMetadata := range []bool{false, true} {
+			t.Run(fmt.Sprintf("type_transitions/enableTypeAndUnitLabels=%t/appendMetadataToWAL=%t", enableTypeLabels, appendMetadata), func(t *testing.T) {
+				s := teststorage.New(t)
+				appTest := teststorage.NewAppendable().Then(s)
+
+				sl, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+					sl.synthesizeST = true
+					sl.parseST = true
+					sl.splitUnknownTypes = true
+					sl.appendMetadataToWAL = appendMetadata
+					sl.enableTypeAndUnitLabels = enableTypeLabels
+				})
+
+				wantLset := func(name string, mt model.MetricType) labels.Labels {
+					if enableTypeLabels && mt != "" {
+						return labels.FromStrings(model.MetricNameLabel, name, model.MetricTypeLabel, string(mt))
+					}
+					return labels.FromStrings(model.MetricNameLabel, name)
+				}
+				wantMetaType := func(mt model.MetricType) model.MetricType {
+					if appendMetadata {
+						return mt
+					}
+					return ""
+				}
+				wantMetaMF := func(mf string) string {
+					if appendMetadata {
+						return mf
+					}
+					return ""
+				}
+
+				// Scrape 1 & 2: establish cached counter, gauge, and unknown series.
+				scrape1 := []byte(`# TYPE c_to_u counter
+c_to_u 5
+# TYPE g_to_u gauge
+g_to_u 10
+# TYPE u_to_c untyped
+u_to_c 100
+`)
+				app := sl.appender()
+				_, _, _, err := app.append(scrape1, "text/plain; version=0.0.4", ts)
+				require.NoError(t, err)
+				require.NoError(t, app.Commit())
+
+				ts2 := ts.Add(time.Second)
+				scrape2 := []byte(`# TYPE c_to_u counter
+c_to_u 8
+# TYPE g_to_u gauge
+g_to_u 11
+# TYPE u_to_c untyped
+u_to_c 105
+`)
+				app = sl.appender()
+				_, _, _, err = app.append(scrape2, "text/plain; version=0.0.4", ts2)
+				require.NoError(t, err)
+				require.NoError(t, app.Commit())
+
+				// Scrape 3: flip all three types across scrapes.
+				// - c_to_u becomes untyped (val=20) -> raw gauge=20 (not delta 15), fresh counter anchor, old c_to_u stale.
+				// - g_to_u loses # TYPE immediately after # TYPE other_counter counter -> splits cleanly, old g_to_u stale.
+				// - u_to_c becomes counter (val=200) -> old u_to_c/unknown + u_to_c/unknown:counter stale, new u_to_c anchored.
+				prevLen := len(appTest.ResultSamples())
+				ts3 := ts2.Add(time.Second)
+				scrape3 := []byte(`# TYPE other_counter counter
+other_counter 1
+g_to_u 12
+# TYPE c_to_u untyped
+c_to_u 20
+# TYPE u_to_c counter
+u_to_c 200
+`)
+				app = sl.appender()
+				_, _, _, err = app.append(scrape3, "text/plain; version=0.0.4", ts3)
+				require.NoError(t, err)
+				require.NoError(t, app.Commit())
+
+				got := appTest.ResultSamples()[prevLen:]
+				// 2 live gauges (g_to_u/unknown, c_to_u/unknown) + 4 stale markers (c_to_u, g_to_u, u_to_c/unknown, u_to_c/unknown:counter).
+				require.Len(t, got, 6)
+				requireSample(t, got[0], wantLset("g_to_u/unknown", model.MetricTypeGauge), 12, timestamp.FromTime(ts3), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("g_to_u/unknown"))
+				requireSample(t, got[1], wantLset("c_to_u/unknown", model.MetricTypeGauge), 20, timestamp.FromTime(ts3), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("c_to_u/unknown"))
+
+				staleByName := map[string]teststorage.Sample{}
+				for _, smp := range got[2:] {
+					require.True(t, value.IsStaleNaN(smp.V))
+					require.Equal(t, timestamp.FromTime(ts3), smp.T)
+					staleByName[smp.L.Get(model.MetricNameLabel)] = smp
+				}
+				require.Contains(t, staleByName, "c_to_u")
+				require.Contains(t, staleByName, "g_to_u")
+				require.Contains(t, staleByName, "u_to_c/unknown")
+				require.Contains(t, staleByName, "u_to_c/unknown:counter")
+
+				// Scrape 4: verify ST synthesis anchored fresh on all transitioned series and __type__ was rebuilt.
+				prevLen = len(appTest.ResultSamples())
+				ts4 := ts3.Add(time.Second)
+				scrape4 := []byte(`# TYPE other_counter counter
+other_counter 4
+g_to_u 16
+# TYPE c_to_u untyped
+c_to_u 27
+# TYPE u_to_c counter
+u_to_c 209
+`)
+				app = sl.appender()
+				_, _, _, err = app.append(scrape4, "text/plain; version=0.0.4", ts4)
+				require.NoError(t, err)
+				require.NoError(t, app.Commit())
+
+				got = appTest.ResultSamples()[prevLen:]
+				require.Len(t, got, 6)
+				requireSample(t, got[0], wantLset("other_counter", model.MetricTypeCounter), 3, timestamp.FromTime(ts4), timestamp.FromTime(ts3), false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("other_counter"))
+				requireSample(t, got[1], wantLset("g_to_u/unknown", model.MetricTypeGauge), 16, timestamp.FromTime(ts4), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("g_to_u/unknown"))
+				requireSample(t, got[2], wantLset("g_to_u/unknown:counter", model.MetricTypeCounter), 4, timestamp.FromTime(ts4), timestamp.FromTime(ts3), false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("g_to_u/unknown:counter"))
+				requireSample(t, got[3], wantLset("c_to_u/unknown", model.MetricTypeGauge), 27, timestamp.FromTime(ts4), 0, false, wantMetaType(model.MetricTypeGauge), "", wantMetaMF("c_to_u/unknown"))
+				requireSample(t, got[4], wantLset("c_to_u/unknown:counter", model.MetricTypeCounter), 7, timestamp.FromTime(ts4), timestamp.FromTime(ts3), false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("c_to_u/unknown:counter"))
+				requireSample(t, got[5], wantLset("u_to_c", model.MetricTypeCounter), 9, timestamp.FromTime(ts4), timestamp.FromTime(ts3), false, wantMetaType(model.MetricTypeCounter), "", wantMetaMF("u_to_c"))
+			})
+		}
+	}
+
+	t.Run("openmetrics_exemplars_and_created", func(t *testing.T) {
+		s := teststorage.New(t, func(opt *tsdb.Options) {
+			opt.EnableExemplarStorage = true
+		})
+		appTest := teststorage.NewAppendable().Then(s)
+
+		sl, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+			sl.synthesizeST = true
+			sl.parseST = false // Leave _created lines visible to verify they do not break following family members.
+			sl.splitUnknownTypes = true
+			sl.appendMetadataToWAL = true
+			sl.enableTypeAndUnitLabels = true
+		})
+
+		scrape1 := []byte(`# TYPE om_counter counter
+om_counter_total{a="1"} 5
+om_counter_created{a="1"} 1700000000
+om_counter_total{a="2"} 10
+# TYPE om_unknown_seconds unknown
+# UNIT om_unknown_seconds seconds
+om_unknown_seconds 20 # {trace_id="t1"} 1 1700000001
+# TYPE om_plain gauge
+om_plain 3
+# EOF
+`)
+		app := sl.appender()
+		_, _, _, err := app.append(scrape1, "application/openmetrics-text", ts)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+
+		ts2 := ts.Add(time.Second)
+		scrape2 := []byte(`# TYPE om_counter counter
+om_counter_total{a="1"} 7
+om_counter_created{a="1"} 1700000000
+om_counter_total{a="2"} 14
+# TYPE om_unknown_seconds unknown
+# UNIT om_unknown_seconds seconds
+om_unknown_seconds 26 # {trace_id="t2"} 2 1700000002
+# TYPE om_plain gauge
+om_plain 4
+# EOF
+`)
+		prevLen := len(appTest.ResultSamples())
+		app = sl.appender()
+		_, _, _, err = app.append(scrape2, "application/openmetrics-text", ts2)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+
+		got := appTest.ResultSamples()[prevLen:]
+		byName := map[string][]teststorage.Sample{}
+		for _, smp := range got {
+			name := smp.L.Get(model.MetricNameLabel)
+			byName[name] = append(byName[name], smp)
+		}
+		// Both om_counter_total{a="1"} and om_counter_total{a="2"} must stay typed counters, not split.
+		require.Len(t, byName["om_counter_total"], 2)
+		require.NotContains(t, byName, "om_counter_total/unknown")
+
+		// Exemplar must only be attached to /unknown:counter, never /unknown; unit must be preserved on both.
+		require.Len(t, byName["om_unknown_seconds/unknown"], 1)
+		gaugeSmp := byName["om_unknown_seconds/unknown"][0]
+		require.Empty(t, gaugeSmp.ES)
+		require.Equal(t, "seconds", gaugeSmp.L.Get(model.MetricUnitLabel))
+		require.Equal(t, "seconds", gaugeSmp.M.Unit)
+
+		require.Len(t, byName["om_unknown_seconds/unknown:counter"], 1)
+		counterSmp := byName["om_unknown_seconds/unknown:counter"][0]
+		require.Len(t, counterSmp.ES, 1)
+		require.Equal(t, "t2", counterSmp.ES[0].Labels.Get("trace_id"))
+		require.Equal(t, "seconds", counterSmp.L.Get(model.MetricUnitLabel))
+		require.Equal(t, "seconds", counterSmp.M.Unit)
+		require.Equal(t, 6.0, counterSmp.V)
+
+		// Subsequent family without # UNIT must not inherit leaked __unit__="seconds".
+		require.Len(t, byName["om_plain"], 1)
+		require.Empty(t, byName["om_plain"][0].L.Get(model.MetricUnitLabel))
+	})
+
+	t.Run("protobuf_float_to_native_histogram", func(t *testing.T) {
+		s := teststorage.New(t)
+		appTest := teststorage.NewAppendable().Then(s)
+
+		sl, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+			sl.splitUnknownTypes = true
+			sl.enableNativeHistogramScraping = true
+			sl.enableTypeAndUnitLabels = false
+		})
+
+		untypedType := dto.MetricType_UNTYPED
+		histType := dto.MetricType_HISTOGRAM
+		scrape1 := protoMarshalDelimited(t, &dto.MetricFamily{
+			Name: proto.String("proto_metric"),
+			Type: &untypedType,
+			Metric: []*dto.Metric{{
+				Label:   []*dto.LabelPair{{Name: proto.String("a"), Value: proto.String("1")}},
+				Untyped: &dto.Untyped{Value: proto.Float64(10)},
+			}},
+		})
+		app := sl.appender()
+		_, _, _, err := app.append(scrape1, "application/vnd.google.protobuf", ts)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		require.Len(t, appTest.ResultSamples(), 2)
+
+		ts2 := ts.Add(time.Second)
+		scrape2 := protoMarshalDelimited(t, &dto.MetricFamily{
+			Name: proto.String("proto_metric"),
+			Type: &histType,
+			Metric: []*dto.Metric{{
+				Label: []*dto.LabelPair{{Name: proto.String("a"), Value: proto.String("1")}},
+				Histogram: &dto.Histogram{
+					SampleCount:   proto.Uint64(5),
+					SampleSum:     proto.Float64(12.5),
+					Schema:        proto.Int32(0),
+					ZeroThreshold: proto.Float64(0.001),
+					ZeroCount:     proto.Uint64(1),
+					PositiveSpan:  []*dto.BucketSpan{{Offset: proto.Int32(0), Length: proto.Uint32(1)}},
+					PositiveDelta: []int64{4},
+				},
+			}},
+		})
+		prevLen := len(appTest.ResultSamples())
+		app = sl.appender()
+		_, _, _, err = app.append(scrape2, "application/vnd.google.protobuf", ts2)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+
+		got := appTest.ResultSamples()[prevLen:]
+		require.Len(t, got, 3)
+		require.Equal(t, labels.FromStrings(model.MetricNameLabel, "proto_metric", "a", "1"), got[0].L)
+		require.NotNil(t, got[0].H)
+		require.Equal(t, labels.FromStrings(model.MetricNameLabel, "proto_metric/unknown", "a", "1"), got[1].L)
+		require.True(t, value.IsStaleNaN(got[1].V))
+		require.Equal(t, labels.FromStrings(model.MetricNameLabel, "proto_metric/unknown:counter", "a", "1"), got[2].L)
+		require.True(t, value.IsStaleNaN(got[2].V))
+	})
+
+	t.Run("error_paths/sample_limit", func(t *testing.T) {
+		s := teststorage.New(t)
+		appTest := teststorage.NewAppendable().Then(s)
+
+		sl, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+			sl.synthesizeST = true
+			sl.splitUnknownTypes = true
+			sl.sampleLimit = 1
+		})
+
+		scrape := []byte("limited_metric 10\n")
+		app := sl.appender()
+		_, _, _, err := app.append(scrape, "text/plain; version=0.0.4", ts)
+		require.NoError(t, err) // Scrape 1 appends only the gauge (counter is anchored).
+		require.NoError(t, app.Commit())
+
+		ts2 := ts.Add(time.Second)
+		app = sl.appender()
+		_, _, _, err = app.append([]byte("limited_metric 15\n"), "text/plain; version=0.0.4", ts2)
+		require.ErrorIs(t, err, errSampleLimit) // Scrape 2 appends gauge + counter = 2 > limit 1.
+		require.NoError(t, app.Rollback())
+	})
+
+	t.Run("error_paths/counter_ooo_after_gauge_succeeds", func(t *testing.T) {
+		s := teststorage.New(t)
+		var returnOOO bool
+		appTest := teststorage.NewAppendable().WithErrs(func(ls labels.Labels) error {
+			if returnOOO && ls.Get(model.MetricNameLabel) == "ooo_metric/unknown:counter" {
+				return storage.ErrOutOfOrderSample
+			}
+			return nil
+		}, nil, nil).Then(s)
+
+		sl, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+			sl.synthesizeST = true
+			sl.splitUnknownTypes = true
+		})
+
+		// Scrape 1: gauge appended, counter anchored.
+		app := sl.appender()
+		_, _, _, err := app.append([]byte("ooo_metric 10\n"), "text/plain; version=0.0.4", ts)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+
+		// Scrape 2: gauge succeeds, counter returns OOO. Gauge must commit without a conflicting StaleNaN.
+		returnOOO = true
+		prevLen := len(appTest.ResultSamples())
+		ts2 := ts.Add(time.Second)
+		app = sl.appender()
+		_, _, _, err = app.append([]byte("ooo_metric 15\n"), "text/plain; version=0.0.4", ts2)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+
+		got := appTest.ResultSamples()[prevLen:]
+		require.Len(t, got, 1)
+		requireSample(t, got[0], labels.FromStrings(model.MetricNameLabel, "ooo_metric/unknown"), 15, timestamp.FromTime(ts2), 0, false, model.MetricTypeGauge, "", "ooo_metric/unknown")
+
+		// Scrape 3 & 4: error clears; counter re-anchors on Scrape 3 and emits delta on Scrape 4.
+		returnOOO = false
+		prevLen = len(appTest.ResultSamples())
+		ts3 := ts2.Add(time.Second)
+		app = sl.appender()
+		_, _, _, err = app.append([]byte("ooo_metric 20\n"), "text/plain; version=0.0.4", ts3)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		got = appTest.ResultSamples()[prevLen:]
+		require.Len(t, got, 1)
+		requireSample(t, got[0], labels.FromStrings(model.MetricNameLabel, "ooo_metric/unknown"), 20, timestamp.FromTime(ts3), 0, false, model.MetricTypeGauge, "", "ooo_metric/unknown")
+
+		prevLen = len(appTest.ResultSamples())
+		ts4 := ts3.Add(time.Second)
+		app = sl.appender()
+		_, _, _, err = app.append([]byte("ooo_metric 24\n"), "text/plain; version=0.0.4", ts4)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		got = appTest.ResultSamples()[prevLen:]
+		require.Len(t, got, 2)
+		requireSample(t, got[0], labels.FromStrings(model.MetricNameLabel, "ooo_metric/unknown"), 24, timestamp.FromTime(ts4), 0, false, model.MetricTypeGauge, "", "ooo_metric/unknown")
+		requireSample(t, got[1], labels.FromStrings(model.MetricNameLabel, "ooo_metric/unknown:counter"), 4, timestamp.FromTime(ts4), timestamp.FromTime(ts3), false, model.MetricTypeCounter, "", "ooo_metric/unknown:counter")
+	})
+
+	t.Run("error_paths/counter_partial_error_preserves_staleness", func(t *testing.T) {
+		s := teststorage.New(t)
+		appTest := teststorage.NewAppendable().WithErrs(nil, storage.ErrOutOfOrderExemplar, nil).Then(s)
+
+		sl, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+			sl.splitUnknownTypes = true
+		})
+
+		scrape1 := []byte("# TYPE partial_metric unknown\npartial_metric 10 # {trace_id=\"abc\"} 1 1700000000\n# EOF\n")
+		app := sl.appender()
+		_, _, seriesAdded, err := app.append(scrape1, "application/openmetrics-text", ts)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		require.Equal(t, 2, seriesAdded)
+
+		// Scrape 2: partial_metric disappears -> both /unknown and /unknown:counter must get StaleNaN.
+		prevLen := len(appTest.ResultSamples())
+		ts2 := ts.Add(time.Second)
+		app = sl.appender()
+		_, _, _, err = app.append([]byte("# TYPE other gauge\nother 1\n# EOF\n"), "application/openmetrics-text", ts2)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+
+		got := appTest.ResultSamples()[prevLen:]
+		require.Len(t, got, 3)
+		requireSample(t, got[1], labels.FromStrings(model.MetricNameLabel, "partial_metric/unknown"), 0, timestamp.FromTime(ts2), 0, true, "", "", "")
+		requireSample(t, got[2], labels.FromStrings(model.MetricNameLabel, "partial_metric/unknown:counter"), 0, timestamp.FromTime(ts2), 0, true, "", "", "")
+	})
+
+	t.Run("validation_schemes", func(t *testing.T) {
+		s := teststorage.New(t)
+		appTest := teststorage.NewAppendable().Then(s)
+
+		slUTF8, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+			sl.splitUnknownTypes = true
+			sl.validationScheme = model.UTF8Validation
+		})
+		app := slUTF8.appender()
+		_, _, _, err := app.append([]byte("{\"my.utf8/metric\"} 10\n"), "text/plain; version=0.0.4", ts)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+		got := appTest.ResultSamples()
+		require.Len(t, got, 2)
+		require.Equal(t, "my.utf8/metric/unknown", got[0].L.Get(model.MetricNameLabel))
+		require.Equal(t, "my.utf8/metric/unknown:counter", got[1].L.Get(model.MetricNameLabel))
+
+		slLegacy, _ := newTestScrapeLoop(t, withAppendable(teststorage.NewAppendable(), true), func(sl *scrapeLoop) {
+			sl.splitUnknownTypes = true
+			sl.validationScheme = model.LegacyValidation
+		})
+		app = slLegacy.appender()
+		_, _, _, err = app.append([]byte("{\"invalid.metric\"} 10\n"), "text/plain; version=0.0.4", ts)
+		require.Error(t, err)
+		require.NoError(t, app.Rollback())
+	})
+
+	t.Run("split_disabled_type_labels_regression", func(t *testing.T) {
+		s := teststorage.New(t)
+		appTest := teststorage.NewAppendable().Then(s)
+
+		sl, _ := newTestScrapeLoop(t, withAppendable(appTest, true), func(sl *scrapeLoop) {
+			sl.synthesizeST = true
+			sl.enableTypeAndUnitLabels = true
+			sl.splitUnknownTypes = false
+		})
+
+		// An untyped metric immediately after a counter must not inherit __type__="counter"
+		// or get dropped/ST-synthesized as a counter.
+		scrape := []byte("# TYPE typed_counter counter\ntyped_counter 5\nuntyped_metric 10\n")
+		app := sl.appender()
+		_, _, _, err := app.append(scrape, "text/plain; version=0.0.4", ts)
+		require.NoError(t, err)
+		require.NoError(t, app.Commit())
+
+		got := appTest.ResultSamples()
+		require.Len(t, got, 1)
+		requireSample(t, got[0], labels.FromStrings(model.MetricNameLabel, "untyped_metric"), 10, timestamp.FromTime(ts), 0, false, "", "", "")
+	})
+}
+
 func TestScrapeLoopAppend_StartTimeSynthesis_OutOfOrder(t *testing.T) {
 	ts := time.Now()
 
@@ -2415,7 +3071,7 @@ func BenchmarkScrapeLoopAppend(b *testing.B) {
 							{name: "PromProto", contentType: "application/vnd.google.protobuf", parsable: metricsProto},
 						} {
 							b.Run(fmt.Sprintf("fmt=%v", bcase.name), func(b *testing.B) {
-								benchScrapeLoopAppend(b, withStorage, appV2, bcase.parsable, bcase.contentType, appendMetadataToWAL, false, false, false)
+								benchScrapeLoopAppend(b, withStorage, appV2, bcase.parsable, bcase.contentType, appendMetadataToWAL, false, false, false, false)
 							})
 						}
 					})
@@ -2441,8 +3097,36 @@ func BenchmarkScrapeLoopAppend_STSynthesis(b *testing.B) {
 				{name: "237FamsAllTypes", parsableText: readTextParseTestMetrics(b), contentType: "application/openmetrics-text", convertToNHCB: true}, // ~185.7 KB, ~70.6 KB in proto.
 			} {
 				b.Run(fmt.Sprintf("withStorage=%v/synthesizeST=%v/data=%v", withStorage, synthesizeST, data.name), func(b *testing.B) {
-					benchScrapeLoopAppend(b, withStorage, true, data.parsableText, data.contentType, false, false, synthesizeST, data.convertToNHCB)
+					benchScrapeLoopAppend(b, withStorage, true, data.parsableText, data.contentType, false, false, synthesizeST, data.convertToNHCB, false)
 				})
+			}
+		}
+	}
+}
+
+// Recommended CLI invocation:
+/*
+	export bench=splitUnknown && go test ./scrape/... \
+		-run '^$' -bench '^BenchmarkScrapeLoopAppend_SplitUnknownTypes' \
+		-benchtime 2s -count 6 -cpu 2 -timeout 999m -benchmem \
+		| tee ${bench}.txt
+*/
+func BenchmarkScrapeLoopAppend_SplitUnknownTypes(b *testing.B) {
+	for _, withStorage := range []bool{false, true} {
+		for _, splitUnknown := range []bool{false, true} {
+			for _, synthesizeST := range []bool{false, true} {
+				for _, data := range []struct {
+					name         string
+					parsableText []byte
+				}{
+					{name: "100Untyped", parsableText: makeTestUntyped(100)},
+					{name: "100Counters", parsableText: makeTestCounters(100)},
+					{name: "237FamsAllTypes", parsableText: readTextParseTestMetrics(b)},
+				} {
+					b.Run(fmt.Sprintf("withStorage=%v/splitUnknown=%v/synthesizeST=%v/data=%v", withStorage, splitUnknown, synthesizeST, data.name), func(b *testing.B) {
+						benchScrapeLoopAppend(b, withStorage, true, data.parsableText, "text/plain", false, false, synthesizeST, false, splitUnknown)
+					})
+				}
 			}
 		}
 	}
@@ -2458,6 +3142,7 @@ func benchScrapeLoopAppend(
 	enableExemplarStorage bool,
 	synthesizeST bool,
 	convertToNHCB bool,
+	splitUnknown bool,
 ) {
 	var a compatAppendable = teststorage.NewAppendable().SkipRecording(true) // Make it noop for benchmark purposes.
 	if withStorage {
@@ -2472,6 +3157,7 @@ func benchScrapeLoopAppend(
 	sl, _ := newTestScrapeLoop(b, withAppendable(a, appV2), func(sl *scrapeLoop) {
 		sl.appendMetadataToWAL = appendMetadataToWAL
 		sl.synthesizeST = synthesizeST
+		sl.splitUnknownTypes = splitUnknown
 		sl.enableNativeHistogramScraping = true
 		sl.convertClassicHistToNHCB = convertToNHCB
 		sl.alwaysScrapeClassicHist = false
@@ -2510,7 +3196,7 @@ func BenchmarkScrapeLoopAppend_HistogramsWithExemplars(b *testing.B) {
 	for _, appV2 := range []bool{false, true} {
 		b.Run(fmt.Sprintf("appV2=%v", appV2), func(b *testing.B) {
 			parsable := makeTestHistogramsWithExemplars(100) // ~255.8 KB in OM text.
-			benchScrapeLoopAppend(b, true, appV2, parsable, "application/openmetrics-text", false, true, false, false)
+			benchScrapeLoopAppend(b, true, appV2, parsable, "application/openmetrics-text", false, true, false, false, false)
 		})
 	}
 }

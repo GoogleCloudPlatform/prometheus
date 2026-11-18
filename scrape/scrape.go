@@ -878,6 +878,7 @@ type scrapeLoop struct {
 	enableSTZeroIngestion   bool
 	parseST                 bool // Used by AppenderV2 only.
 	enableTypeAndUnitLabels bool
+	splitUnknownTypes       bool
 	reportExtraMetrics      bool
 	appendMetadataToWAL     bool
 	passMetadataInContext   bool
@@ -918,6 +919,11 @@ type scrapeCache struct {
 	// Series that were seen in the current and previous scrape, for staleness detection.
 	seriesCur  map[storage.SeriesRef]*cacheEntry
 	seriesPrev map[storage.SeriesRef]*cacheEntry
+
+	// Per-series state for splitUnknownTypes, lazily allocated outside cacheEntry
+	// so cacheEntry stays in the 48-byte allocator size class when the flag is off.
+	splitStates   map[*cacheEntry]splitCacheEntry
+	replacedSplit []*cacheEntry
 
 	// TODO(bwplotka): Consider moving metadata caching to head. See
 	// https://github.com/prometheus/prometheus/issues/17619.
@@ -976,6 +982,9 @@ func (c *scrapeCache) iterDone(flushCache bool) {
 		for s, e := range c.series {
 			if c.iter != e.lastIter {
 				delete(c.series, s)
+				if c.splitStates != nil {
+					delete(c.splitStates, e)
+				}
 			}
 		}
 		for s, iter := range c.droppedSeries {
@@ -993,11 +1002,43 @@ func (c *scrapeCache) iterDone(flushCache bool) {
 		c.metaMtx.Unlock()
 	}
 
+	// Clean up split state for cache entries replaced during this scrape now that staleness has run.
+	if len(c.replacedSplit) > 0 {
+		for _, e := range c.replacedSplit {
+			delete(c.splitStates, e)
+		}
+		clear(c.replacedSplit)
+		c.replacedSplit = c.replacedSplit[:0]
+	}
+
 	// Swap current and previous series then clear the new current, to save allocations.
 	c.seriesPrev, c.seriesCur = c.seriesCur, c.seriesPrev
 	clear(c.seriesCur)
 
 	c.iter++
+}
+
+func (c *scrapeCache) getSplitState(ce *cacheEntry) (splitCacheEntry, bool) {
+	if c.splitStates == nil || ce == nil {
+		return splitCacheEntry{}, false
+	}
+	s, ok := c.splitStates[ce]
+	return s, ok
+}
+
+func (c *scrapeCache) setSplitState(ce *cacheEntry, s splitCacheEntry) {
+	if ce == nil {
+		return
+	}
+	if c.splitStates == nil {
+		c.splitStates = map[*cacheEntry]splitCacheEntry{}
+	}
+	c.splitStates[ce] = s
+}
+
+func (c *scrapeCache) getUnknown(ce *cacheEntry) *unknownSeriesState {
+	s, _ := c.getSplitState(ce)
+	return s.unknown
 }
 
 func (c *scrapeCache) get(met []byte) (*cacheEntry, bool, bool) {
@@ -1011,6 +1052,13 @@ func (c *scrapeCache) get(met []byte) (*cacheEntry, bool, bool) {
 }
 
 func (c *scrapeCache) addRef(met []byte, ref storage.SeriesRef, lset labels.Labels, hash uint64) (ce *cacheEntry) {
+	if c.splitStates != nil {
+		if prev, ok := c.series[string(met)]; ok {
+			if _, hasSplit := c.splitStates[prev]; hasSplit {
+				c.replacedSplit = append(c.replacedSplit, prev)
+			}
+		}
+	}
 	ce = &cacheEntry{ref: ref, lastIter: c.iter, lset: lset, hash: hash}
 	c.series[string(met)] = ce
 	return ce
@@ -1036,6 +1084,12 @@ func (c *scrapeCache) trackStaleness(ref storage.SeriesRef, ce *cacheEntry) {
 func (c *scrapeCache) forEachStale(f func(storage.SeriesRef, labels.Labels) bool) {
 	for ref, ce := range c.seriesPrev {
 		if _, ok := c.seriesCur[ref]; !ok {
+			if u := c.getUnknown(ce); u != nil {
+				if !u.forEachStale(ce.ref, f) {
+					break
+				}
+				continue
+			}
 			if !f(ce.ref, ce.lset) {
 				break
 			}
@@ -1251,6 +1305,7 @@ func newScrapeLoop(opts scrapeLoopOptions) *scrapeLoop {
 		parseST:                 opts.sp.options.ParseST || opts.sp.options.EnableStartTimestampZeroIngestion,
 		synthesizeST:            opts.sp.options.SynthesizeST,
 		enableTypeAndUnitLabels: opts.sp.options.EnableTypeAndUnitLabels,
+		splitUnknownTypes:       opts.sp.options.SplitUnknownTypes,
 		appendMetadataToWAL:     opts.sp.options.AppendMetadata,
 		passMetadataInContext:   opts.sp.options.PassMetadataInContext,
 		skipJitterOffsetting:    opts.sp.options.skipJitterOffsetting,
