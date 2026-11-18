@@ -217,6 +217,8 @@ type distribution struct {
 	timestamp      int64
 	resetTimestamp int64
 	exemplars      []record.RefExemplar
+	// Original le label values for each bucket boundary, parallel to bounds.
+	leLabels []string
 	// If all three are true, we can be sure to have observed all series for the
 	// distribution as buckets must be specified in ascending order.
 	hasSum, hasCount, hasInfBucket bool
@@ -238,6 +240,7 @@ func (d *distribution) reset() {
 	d.timestamp, d.resetTimestamp = 0, 0
 	d.skip = false
 	d.exemplars = d.exemplars[:0]
+	d.leLabels = d.leLabels[:0]
 	d.hash = 0
 	d.proto = nil
 	d.lset = labels.EmptyLabels()
@@ -269,6 +272,28 @@ func (d *distribution) Less(i, j int) bool {
 func (d *distribution) Swap(i, j int) {
 	d.bounds[i], d.bounds[j] = d.bounds[j], d.bounds[i]
 	d.values[i], d.values[j] = d.values[j], d.values[i]
+	d.leLabels[i], d.leLabels[j] = d.leLabels[j], d.leLabels[i]
+}
+
+func histogramMetricName(lset labels.Labels) string {
+	name := lset.Get(labels.MetricName)
+	if name == "" {
+		return lset.String()
+	}
+	return name
+}
+
+func duplicateBucketBoundaryError(metric string, lePrev, leCur string, bound float64, lset labels.Labels) error {
+	if lePrev != "" && leCur != "" {
+		return fmt.Errorf(
+			"invalid histogram metric %s: duplicate bucket boundary from le labels %q and %q (both parse to %g): %s",
+			metric, lePrev, leCur, bound, lset,
+		)
+	}
+	return fmt.Errorf(
+		"invalid histogram metric %s: duplicate bucket boundary %g: %s",
+		metric, bound, lset,
+	)
 }
 
 func (d *distribution) build(lset labels.Labels) (*distribution_pb.Distribution, error) {
@@ -303,15 +328,17 @@ func (d *distribution) build(lset labels.Labels) (*distribution_pb.Distribution,
 	}
 
 	for i, bound := range d.bounds {
-		if i > 0 && prevBound == bound {
-			// Bounds has to be higher than the previous one.
-			// Rarely, but the same bounds can occur due to string to float imprecision
-			// or invalid representations of the same float e.g. 1 vs 1.0.
-			// GCM API rejects those, so reject them early.
+		if i > 0 && prevBound >= bound && !math.IsInf(bound, 1) {
+			// Bounds must be strictly increasing. Equal values can occur when different
+			// le label strings parse to the same float64 (e.g. "0.005" and
+			// "0.00500000000000000006"). GCM rejects those, so reject them early.
 			prometheusSamplesDiscarded.WithLabelValues("duplicate-bucket-boundary").Add(float64(d.inputSampleCount()))
-			err := fmt.Errorf("invalid histogram with duplicates bounds (le label value) %s: count=%f, sum=%f, dev=%f, index=%d, bucketBound=%f, bucketPrevBound=%f",
-				lset, d.count, d.sum, dev, i, bound, prevBound)
-			return nil, err
+			lePrev, leCur := "", ""
+			if len(d.leLabels) == len(d.bounds) {
+				lePrev = d.leLabels[i-1]
+				leCur = d.leLabels[i]
+			}
+			return nil, duplicateBucketBoundaryError(histogramMetricName(lset), lePrev, leCur, bound, lset)
 		}
 
 		if math.IsInf(bound, 1) {
@@ -460,7 +487,8 @@ Loop:
 			dist.resetTimestamp = rt
 
 		case metricSuffixBucket:
-			bound, err := strconv.ParseFloat(e.lset.Get(labels.BucketLabel), 64)
+			leLabel := e.lset.Get(labels.BucketLabel)
+			bound, err := strconv.ParseFloat(leLabel, 64)
 			if err != nil {
 				prometheusSamplesDiscarded.WithLabelValues("malformed-bucket-le-label").Inc()
 				discardExemplarIncIfExists(storage.SeriesRef(s.Ref), exemplars, "malformed-bucket-le-label")
@@ -471,11 +499,23 @@ Loop:
 				discardExemplarIncIfExists(storage.SeriesRef(s.Ref), exemplars, "NaN-bucket-value")
 				continue
 			}
+			for i, existing := range dist.bounds {
+				if existing == bound {
+					prometheusSamplesDiscarded.WithLabelValues("duplicate-bucket-boundary").Add(float64(dist.inputSampleCount()))
+					discardExemplarIncIfExists(storage.SeriesRef(s.Ref), exemplars, "duplicate-bucket-boundary")
+					lePrev := ""
+					if len(dist.leLabels) == len(dist.bounds) {
+						lePrev = dist.leLabels[i]
+					}
+					return nil, samples[consumed:], duplicateBucketBoundaryError(metric, lePrev, leLabel, bound, e.lset)
+				}
+			}
 			// Handle cases where +Inf bucket is out-of-order by not overwriting on the last-consumed bucket.
 			if !dist.hasInfBucket {
 				dist.hasInfBucket = math.IsInf(bound, 1)
 			}
 			dist.bounds = append(dist.bounds, bound)
+			dist.leLabels = append(dist.leLabels, leLabel)
 			dist.values = append(dist.values, int64(v))
 			if exemplar, ok := exemplars[storage.SeriesRef(s.Ref)]; ok {
 				dist.exemplars = append(dist.exemplars, exemplar)
