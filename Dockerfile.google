@@ -4,10 +4,10 @@ ARG IMAGE_BUILD_GO=google-go.pkg.dev/golang:1.26.11@sha256:dcf06becb8142d3ac50c4
 ARG IMAGE_BASE_DEBUG=gcr.io/distroless/base-nossl-debian12:debug
 ARG IMAGE_BASE=gke.gcr.io/gke-distroless/libc:gke_distroless_20261101.00_p0@sha256:52e1fd9180da347fc8d735c50368872b33d7e9505b09a70a861ebe57940bf0c6
 
-FROM ${IMAGE_BUILD_GO} AS gobase
+FROM --platform=$BUILDPLATFORM ${IMAGE_BUILD_GO} AS gobase
 
 # Compile the UI assets.
-FROM ${IMAGE_BUILD_NODEJS} as assets
+FROM --platform=$BUILDPLATFORM ${IMAGE_BUILD_NODEJS} as assets
 # Changed to root,as normally it's underprivileged www-data user.
 # For building stages it's fine to do it as root and have less complex scripts.
 USER root
@@ -42,6 +42,9 @@ RUN make npm_licenses
 
 # Build the actual Go binary.
 FROM gobase as buildbase
+ARG TARGETARCH
+ARG TARGETOS
+ARG BUILDARCH
 WORKDIR /app
 COPY --from=assets /app ./
 ENV GOEXPERIMENT=boringcrypto
@@ -51,10 +54,14 @@ ENV GOTOOLCHAIN=local
 ENV GOARCH=${TARGETARCH}
 ENV GOOS=${TARGETOS}
 RUN if [ "${TARGETARCH}" = "arm64" ] && [ "${BUILDARCH}" != "arm64" ]; then \
-      apt install -y --no-install-recommends \
-        gcc-aarch64-linux-gnu libc6-dev-arm64-cross; \
-      CC=aarch64-linux-gnu-gcc; \
-    fi && \ 
+      apt-get update && apt-get install -y --no-install-recommends \
+        gcc-aarch64-linux-gnu libc6-dev-arm64-cross && \
+      export CC=aarch64-linux-gnu-gcc; \
+    elif [ "${TARGETARCH}" = "amd64" ] && [ "${BUILDARCH}" != "amd64" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends \
+        gcc-x86-64-linux-gnu libc6-dev-amd64-cross && \
+      export CC=x86_64-linux-gnu-gcc; \
+    fi && \
     go build \
     -tags builtinassets -mod=vendor \
     -ldflags="-X github.com/prometheus/common/version.Version=$(cat VERSION) \
