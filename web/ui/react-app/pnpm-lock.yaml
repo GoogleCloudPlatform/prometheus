@@ -187,8 +187,8 @@ importers:
         specifier: ^5.5.6
         version: 5.5.6(@types/eslint@8.56.12)(eslint-config-prettier@10.1.8(eslint@8.57.1))(eslint@8.57.1)(prettier@3.8.4)
       jest-canvas-mock:
-        specifier: ^2.5.3
-        version: 2.5.3
+        specifier: ^2.5.8
+        version: 2.5.8
       jest-fetch-mock:
         specifier: ^3.0.3
         version: 3.0.3
@@ -3777,9 +3777,8 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  jest-canvas-mock@2.5.3:
-    resolution: {integrity: sha512-yyJ6q6ILoDjS1bx/lKxOzDJW7eCdnJ35jlv3EGblgBsl94WKf0mlUnQEu5lG0f6BQnznPj/EfqMn+/NO7i62TA==}
-    deprecated: This version was published in error, please use the latest version instead.
+  jest-canvas-mock@2.5.8:
+    resolution: {integrity: sha512-RUZRaFHCnLjg0/UAodCai5PTsa7kQI1rUXE5wsQu9f2315dh2YSN7/i3fObTycs7PO09DLSiGXiJTALYIw2yuw==}
 
   jest-changed-files@27.5.1:
     resolution: {integrity: sha512-buBLMiByfWGCoMsLLzGUUSpAmIAGnbR2KJoMN10ziLhOLvP4e0SlypHnAel8iqQXTrcbmfEY9sSqae5sgUsTvw==}
@@ -10692,7 +10691,7 @@ snapshots:
       filelist: 1.0.6
       picocolors: 1.1.1
 
-  jest-canvas-mock@2.5.3:
+  jest-canvas-mock@2.5.8:
     dependencies:
       cssfontparser: 1.2.1
       moo-color: 1.0.3
