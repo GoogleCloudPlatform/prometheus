@@ -3,7 +3,6 @@ module github.com/prometheus/prometheus
 go 1.26.0
 
 require (
-	cloud.google.com/go/auth v0.18.2
 	cloud.google.com/go/compute/metadata v0.9.0
 	cloud.google.com/go/monitoring v1.24.3
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.18.0
@@ -31,7 +30,6 @@ require (
 	github.com/go-openapi/strfmt v0.23.0
 	github.com/go-zookeeper/zk v1.0.3
 	github.com/gogo/protobuf v1.3.2
-	github.com/golang/protobuf v1.5.4
 	github.com/golang/snappy v0.0.4
 	github.com/google/go-cmp v0.7.0
 	github.com/google/pprof v0.0.0-20241029153458-d1b30febd7db
@@ -58,10 +56,8 @@ require (
 	github.com/oklog/run v1.1.0
 	github.com/oklog/ulid v1.3.1
 	github.com/ovh/go-ovh v1.5.1
-	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10
 	github.com/prometheus/alertmanager v0.27.0
 	github.com/prometheus/client_golang v1.23.0
-	github.com/prometheus/client_golang/exp v0.0.0-20250820144310-1f3a9042681e
 	github.com/prometheus/client_model v0.6.2
 	github.com/prometheus/common v0.65.0
 	github.com/prometheus/common/assets v0.2.0
@@ -105,7 +101,12 @@ require (
 	sigs.k8s.io/controller-runtime v0.18.7
 )
 
-require github.com/cenkalti/backoff/v5 v5.0.3 // indirect
+require (
+	cloud.google.com/go/auth v0.18.2 // indirect
+	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
+)
 
 require (
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
