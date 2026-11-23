@@ -165,7 +165,7 @@ func initialTimeSeriesConvert(ts *writev2.TimeSeries, symbols []string) (_ *moni
 func convertTimeSeriesPoint(exportTS *monitoring_pb.TimeSeries, ts *writev2.TimeSeries, point int) (stats remote.WriteResponseStats, _ *monitoring_pb.Point, _ error) {
 	switch ts.GetMetadata().GetType() {
 	case writev2.Metadata_METRIC_TYPE_HISTOGRAM, writev2.Metadata_METRIC_TYPE_GAUGEHISTOGRAM:
-		if len(ts.Histograms) < point {
+		if len(ts.Histograms) <= point {
 			return stats, nil, nil
 		}
 		h := ts.Histograms[point]
@@ -189,7 +189,7 @@ func convertTimeSeriesPoint(exportTS *monitoring_pb.TimeSeries, ts *writev2.Time
 			},
 		}, nil
 	default:
-		if len(ts.Samples) < point {
+		if len(ts.Samples) <= point {
 			return stats, nil, nil
 		}
 		s := ts.Samples[point]
@@ -215,17 +215,33 @@ func convertTimeSeriesPoint(exportTS *monitoring_pb.TimeSeries, ts *writev2.Time
 	}
 }
 
+func lookupSymbol(symbols []string, ref uint32) (string, error) {
+	if uint64(ref) >= uint64(len(symbols)) {
+		return "", newHTTPErrorf(http.StatusBadRequest, "symbol reference %d out of bounds (symbol table length %d)", ref, len(symbols))
+	}
+	return symbols[ref], nil
+}
+
 func initTSFromLabels(meta *writev2.Metadata, labelsRefs []uint32, symbols []string) (*monitoring_pb.TimeSeries, error) {
+	if len(labelsRefs)%2 != 0 {
+		return nil, newHTTPErrorf(http.StatusBadRequest, "odd number of label references: %d", len(labelsRefs))
+	}
+
 	name := ""
 	resLabels := map[string]string{}
 	metricLabels := map[string]string{}
 
 	// Remote Write contains all labels in one sorted, interned array.
 	// Validate if we have all labels required for the resource.
-	// TODO(bwplotka): Check len(labelRefs) mod 2, etc
 	for i := 0; i < len(labelsRefs); i += 2 {
-		n := symbols[labelsRefs[i]]
-		v := symbols[labelsRefs[i+1]]
+		n, err := lookupSymbol(symbols, labelsRefs[i])
+		if err != nil {
+			return nil, fmt.Errorf("label name at index %d: %w", i, err)
+		}
+		v, err := lookupSymbol(symbols, labelsRefs[i+1])
+		if err != nil {
+			return nil, fmt.Errorf("label value at index %d: %w", i+1, err)
+		}
 
 		switch n {
 		case "__name__":
@@ -248,6 +264,15 @@ func initTSFromLabels(meta *writev2.Metadata, labelsRefs []uint32, symbols []str
 	if len(metricLabels) > maxLabelCount {
 		// TODO: Is the field limit is lifted in the GCM API already?
 		return nil, newHTTPErrorf(http.StatusBadRequest, "metric labels exceed the limit of %d; got %v", maxLabelCount, len(metricLabels))
+	}
+
+	help, err := lookupSymbol(symbols, meta.GetHelpRef())
+	if err != nil {
+		return nil, fmt.Errorf("metadata help ref: %w", err)
+	}
+	unit, err := lookupSymbol(symbols, meta.GetUnitRef())
+	if err != nil {
+		return nil, fmt.Errorf("metadata unit ref: %w", err)
 	}
 
 	descriptor, kind, err := describeMetric(name, meta.GetType())
@@ -275,8 +300,8 @@ func initTSFromLabels(meta *writev2.Metadata, labelsRefs []uint32, symbols []str
 			Labels: metricLabels,
 		},
 		MetricKind:  kind,
-		Description: symbols[meta.GetHelpRef()],
-		Unit:        symbols[meta.GetUnitRef()], // TODO: Check if it's safe to do (new behaviour vs export pkg).
+		Description: help,
+		Unit:        unit, // TODO: Check if it's safe to do (new behaviour vs export pkg).
 	}, nil
 }
 

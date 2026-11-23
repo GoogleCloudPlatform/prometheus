@@ -32,20 +32,33 @@ import (
 	"strings"
 )
 
-// LabelsToString return labels into PromQL-like readable string.
+// LabelsToString formats labels into a PromQL-like string without panicking on malformed symbol references.
 func (m *TimeSeries) LabelsToString(symbols []string) string {
+	if m == nil {
+		return "{}"
+	}
+	lookup := func(ref uint32) string {
+		if uint64(ref) >= uint64(len(symbols)) {
+			return fmt.Sprintf("<invalid ref %d>", ref)
+		}
+		return symbols[ref]
+	}
+
 	var (
 		name string
 		lbls []string
 	)
-	for i := 0; i < len(m.LabelsRefs); i += 2 {
-		n, v := symbols[m.LabelsRefs[i]], symbols[m.LabelsRefs[i+1]]
+	for i := 0; i+1 < len(m.LabelsRefs); i += 2 {
+		n, v := lookup(m.LabelsRefs[i]), lookup(m.LabelsRefs[i+1])
 		if n == "__name__" {
 			name = v
 			continue
 		}
 		// TODO: Quote UTF-8.
 		lbls = append(lbls, fmt.Sprintf("%v=%q", n, v))
+	}
+	if len(m.LabelsRefs)%2 != 0 {
+		lbls = append(lbls, fmt.Sprintf("<dangling ref %d>", m.LabelsRefs[len(m.LabelsRefs)-1]))
 	}
 
 	b := strings.Builder{}
