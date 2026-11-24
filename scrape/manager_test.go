@@ -51,6 +51,7 @@ import (
 	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb/tsdbutil"
+	"github.com/prometheus/prometheus/util/features"
 	"github.com/prometheus/prometheus/util/runutil"
 	"github.com/prometheus/prometheus/util/teststorage"
 	"github.com/prometheus/prometheus/util/testutil"
@@ -1756,6 +1757,37 @@ scrape_configs:
 			require.Equal(t, expectedDisabled, loop.disabledEndOfRunStalenessMarkers.Load())
 		}
 	}
+}
+
+func TestManagerSplitUnknownTypesOption(t *testing.T) {
+	cfg := loadConfiguration(t, `
+scrape_configs:
+ - job_name: one
+   scrape_interval: 1m
+   scrape_timeout: 1m
+`)
+
+	reg := features.NewRegistry()
+	m, err := NewManager(&Options{
+		SplitUnknownTypes: true,
+		FeatureRegistry:   reg,
+	}, nil, nil, nil, teststorage.NewAppendable(), prometheus.NewRegistry())
+	require.NoError(t, err)
+	t.Cleanup(m.Stop)
+	require.NoError(t, m.ApplyConfig(cfg))
+
+	feat := reg.Get()
+	require.True(t, feat[features.Scrape]["gmp_split_unknown_types"])
+
+	m.updateTsets(map[string][]*targetgroup.Group{
+		"one": {{Targets: []model.LabelSet{{"__address__": "h1"}}}},
+	})
+	m.reload()
+
+	activeTargets := m.TargetsActive()
+	require.Len(t, activeTargets["one"], 1)
+	loop := m.scrapePools["one"].loops[activeTargets["one"][0].hash()].(*scrapeLoop)
+	require.True(t, loop.splitUnknownTypes)
 }
 
 func TestManager_InitialScrapeOffset(t *testing.T) {
